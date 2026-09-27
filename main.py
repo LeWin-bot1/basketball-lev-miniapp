@@ -49,9 +49,9 @@ WELCOME_IMG = BASE_DIR / "assets" / "basketball_money.png"
 LION_WELCOME_IMG = BASE_DIR / "assets" / "lion_welcome.png"
 THANKS_IMG = BASE_DIR / "assets" / "thanks.png"
 
-# URL мини-приложения. На Render можно не задавать: возьмём RENDER_EXTERNAL_URL.
+# На Render всегда берём адрес самого сервиса, иначе в env может остаться старый GitHub Pages URL.
 MINIAPP_URL = (
-    os.getenv("MINIAPP_URL") or os.getenv("RENDER_EXTERNAL_URL") or ""
+    os.getenv("RENDER_EXTERNAL_URL") or os.getenv("MINIAPP_URL") or ""
 ).rstrip("/")
 
 

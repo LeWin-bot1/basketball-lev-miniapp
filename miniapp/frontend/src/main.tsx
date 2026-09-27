@@ -4,18 +4,20 @@ import WebApp from '@twa-dev/sdk'
 import App from './App'
 import './index.css'
 
-// Инициализируем Telegram Web App SDK
-WebApp.ready()
+try {
+  WebApp.ready()
+  WebApp.expand()
+  WebApp.setHeaderColor('#f9a825')
+  WebApp.setBackgroundColor('#ffffff')
+} catch (error) {
+  console.warn('Telegram WebApp init skipped', error)
+}
 
-// Расширяем на весь экран
-WebApp.expand()
-
-// Устанавливаем цвета
-WebApp.setHeaderColor('#f9a825')
-WebApp.setBackgroundColor('#ffffff')
-
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)
+const root = document.getElementById('root')
+if (root) {
+  ReactDOM.createRoot(root).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  )
+}
