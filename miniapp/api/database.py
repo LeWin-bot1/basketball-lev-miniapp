@@ -3,6 +3,8 @@
 Использует ту же SQLite базу, что и основной бот.
 """
 
+import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -41,7 +43,7 @@ def get_player(user_id: int) -> Optional[dict]:
             """
             SELECT user_id, username, first_name, game_nick, lev, rating,
                    wins, losses, draws, matches_played, team_id, created_at,
-                   stars_pending
+                   stars_pending, last_match_json
             FROM players
             WHERE user_id = ?
             """,
@@ -89,7 +91,7 @@ def get_leaderboard(page: int = 1, per_page: int = 50) -> Tuple[List[dict], int]
         offset = (page - 1) * per_page
         cur.execute(
             """
-            SELECT user_id, username, first_name, wins, losses, rating
+            SELECT user_id, username, first_name, game_nick, wins, losses, rating
             FROM players
             WHERE wins > 0 OR losses > 0
             ORDER BY wins DESC, rating DESC
@@ -116,7 +118,7 @@ def get_solo_tournament_leaderboard(limit: int = 100) -> Tuple[List[dict], int]:
         # Топ игроков турнира
         cur.execute(
             """
-            SELECT ts.user_id, p.username, p.first_name, ts.wins, ts.losses,
+            SELECT ts.user_id, p.username, p.first_name, p.game_nick, ts.wins, ts.losses,
                    (ts.wins * 3) as points
             FROM tournament_solo ts
             JOIN players p ON p.user_id = ts.user_id
@@ -326,3 +328,149 @@ def get_balance_summary(user_id: int) -> dict:
             "total_earned": total_earned,
             "total_spent": total_spent
         }
+
+
+NICK_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9 _.-]{2,20}$")
+
+
+def ensure_player(user_id: int, username: str = "", first_name: str = "") -> dict:
+    """Создаёт игрока, если его ещё нет, и возвращает профиль."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO players(user_id, username, first_name) VALUES(?,?,?)",
+            (user_id, username or "", first_name or ""),
+        )
+        cur.execute(
+            "UPDATE players SET username=?, first_name=? WHERE user_id=?",
+            (username or "", first_name or "", user_id),
+        )
+        conn.commit()
+    player = get_player(user_id)
+    if not player:
+        raise RuntimeError("Failed to create player")
+    return player
+
+
+def update_game_nick(user_id: int, game_nick: str) -> str:
+    """Сохраняет игровой ник. Возвращает нормализованное имя."""
+    nick = (game_nick or "").strip()
+    if not NICK_RE.match(nick):
+        raise ValueError(
+            "Ник: 2–20 символов, буквы, цифры, пробел, _ . -"
+        )
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE players SET game_nick=? WHERE user_id=?",
+            (nick, user_id),
+        )
+        conn.commit()
+    return nick
+
+
+def _row_to_match(row: dict, user_id: int) -> dict:
+    result = (row.get("result") or "").replace("timeout_", "")
+    if result not in ("win", "loss", "draw"):
+        if result.endswith("win"):
+            result = "win"
+        elif result.endswith("loss"):
+            result = "loss"
+        else:
+            result = "draw"
+    return {
+        "match_id": str(row.get("id") or ""),
+        "opponent_name": row.get("opponent_nick"),
+        "opponent_id": row.get("opponent_id"),
+        "player_score": row.get("you_score") or 0,
+        "opponent_score": row.get("opp_score") or 0,
+        "result": result,
+        "bet_amount": row.get("stake"),
+        "currency": "stars" if row.get("mode") == "stars" else "lev",
+        "played_at": row.get("played_at"),
+        "mode": row.get("mode_human") or row.get("mode"),
+        "delta_lev": row.get("delta_lev") or 0,
+    }
+
+
+def _last_match_from_json(player: dict) -> Optional[dict]:
+    raw = player.get("last_match_json")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return _row_to_match(
+        {
+            "id": "last",
+            "opponent_nick": data.get("opponent_nick"),
+            "opponent_id": data.get("opponent_id"),
+            "you_score": data.get("you_score"),
+            "opp_score": data.get("opp_score"),
+            "result": data.get("result"),
+            "stake": data.get("stake"),
+            "mode": data.get("mode"),
+            "mode_human": data.get("mode_human"),
+            "played_at": data.get("ts"),
+            "delta_lev": data.get("delta_lev"),
+        },
+        player.get("user_id", 0),
+    )
+
+
+def get_match_history(user_id: int, limit: int = 50, offset: int = 0) -> Tuple[List[dict], int]:
+    """История матчей игрока. Если таблицы ещё нет — берём last_match_json."""
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM match_history WHERE user_id = ?",
+                (user_id,),
+            )
+            total = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT id, user_id, opponent_id, opponent_nick, mode, mode_human,
+                       target, stake, you_score, opp_score, result, delta_lev, played_at
+                FROM match_history
+                WHERE user_id = ?
+                ORDER BY played_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (user_id, limit, offset),
+            )
+            rows = [row_to_dict(r) for r in cur.fetchall()]
+        if rows:
+            return [_row_to_match(r, user_id) for r in rows], total
+    except sqlite3.OperationalError:
+        pass
+
+    player = get_player(user_id)
+    last = _last_match_from_json(player or {})
+    if last:
+        return [last], 1
+    return [], 0
+
+
+def compute_win_streaks(user_id: int) -> Tuple[int, int]:
+    """Текущая и лучшая серия побед."""
+    matches, _ = get_match_history(user_id, limit=200, offset=0)
+    if not matches:
+        return 0, 0
+
+    current = 0
+    for match in matches:
+        if match["result"] == "win":
+            current += 1
+        else:
+            break
+
+    best = 0
+    run = 0
+    for match in reversed(matches):
+        if match["result"] == "win":
+            run += 1
+            best = max(best, run)
+        else:
+            run = 0
+    return current, max(best, current)

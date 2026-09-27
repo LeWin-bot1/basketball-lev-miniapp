@@ -23,6 +23,7 @@ class PlayerProfile(BaseModel):
     matches_played: int = 0
     team_id: Optional[int] = None
     created_at: Optional[int] = None
+    stars_pending: int = 0
     
     @property
     def win_rate(self) -> float:
@@ -53,6 +54,8 @@ class MatchResult(BaseModel):
     bet_amount: Optional[int] = None
     currency: Optional[str] = None
     played_at: Optional[int] = None
+    mode: Optional[str] = None
+    delta_lev: int = 0
 
 
 # -------------------- Tournament Models --------------------
@@ -61,6 +64,7 @@ class TournamentPlayer(BaseModel):
     user_id: int
     username: Optional[str] = None
     first_name: Optional[str] = None
+    game_nick: Optional[str] = None
     wins: int = 0
     losses: int = 0
     points: int = 0  # wins * 3 (можно настроить)
@@ -79,6 +83,7 @@ class TournamentLeaderboard(BaseModel):
     total_participants: int
     current_user_rank: Optional[int] = None
     tournament_end_date: Optional[str] = None
+    prize: Optional[str] = None
 
 
 class TournamentTeam(BaseModel):
@@ -118,6 +123,8 @@ class TeamLeaderboard(BaseModel):
     teams: List[TournamentTeam]
     total_teams: int
     current_team_rank: Optional[int] = None
+    tournament_end_date: Optional[str] = None
+    prize: Optional[str] = None
 
 
 # -------------------- Ledger / Finance Models --------------------
@@ -161,6 +168,7 @@ class LeaderboardEntry(BaseModel):
     user_id: int
     username: Optional[str] = None
     first_name: Optional[str] = None
+    game_nick: Optional[str] = None
     wins: int = 0
     losses: int = 0
     rating: int = 1000
@@ -174,6 +182,15 @@ class GlobalLeaderboard(BaseModel):
     page: int = 1
     per_page: int = 50
     total_pages: int = 1
+
+
+class UpdateNickRequest(BaseModel):
+    game_nick: str
+
+
+class MatchHistory(BaseModel):
+    matches: List[MatchResult]
+    total: int
 
 
 # Для forward references

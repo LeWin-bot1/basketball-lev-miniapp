@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Trophy, Users, Clock, Medal, Wifi, WifiOff } from 'lucide-react';
 import { api } from '../api/client';
 import { useTournamentWebSocket } from '../hooks/useWebSocket';
@@ -36,7 +37,19 @@ const mockTeamTournament: TeamLeaderboard = {
   current_team_rank: 5,
 };
 
+function formatDeadline(isoDate?: string): string {
+  if (!isoDate) return 'Дата уточняется';
+  const end = new Date(`${isoDate}T23:59:59`);
+  const diff = end.getTime() - Date.now();
+  if (diff <= 0) return 'Турнир завершён';
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
+  if (days > 0) return `${days} дн. ${hours} ч.`;
+  return `${hours} ч.`;
+}
+
 export default function TournamentsPage() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('solo');
   const [soloData, setSoloData] = useState<TournamentLeaderboard | null>(null);
   const [teamData, setTeamData] = useState<TeamLeaderboard | null>(null);
@@ -140,9 +153,18 @@ export default function TournamentsPage() {
           <Clock size={18} />
           <span className="text-sm opacity-90">До конца турнира</span>
         </div>
-        <div className="text-2xl font-bold">14 дней 6 часов</div>
+        <div className="text-2xl font-bold">
+          {formatDeadline(
+            activeTab === 'solo'
+              ? soloData?.tournament_end_date
+              : teamData?.tournament_end_date
+          )}
+        </div>
         <div className="mt-3 text-sm opacity-75">
-          Призовой фонд: 50,000 Lev
+          Приз:{' '}
+          {activeTab === 'solo'
+            ? soloData?.prize || 'майка Prada'
+            : teamData?.prize || '10000 тг Sta'}
         </div>
       </div>
 
@@ -196,17 +218,30 @@ export default function TournamentsPage() {
       {/* Список */}
       <div className="space-y-2">
         {activeTab === 'solo' &&
-          soloData?.players.map((player: TournamentPlayer, index: number) => (
-            <LeaderboardRow
-              key={player.user_id}
-              rank={index + 1}
-              name={player.first_name || player.username || `ID: ${player.user_id}`}
-              username={player.username}
-              wins={player.wins}
-              losses={player.losses}
-              points={player.points}
-            />
+          (soloData?.players.length ? (
+            soloData.players.map((player: TournamentPlayer, index: number) => (
+              <LeaderboardRow
+                key={player.user_id}
+                rank={index + 1}
+                name={player.game_nick || player.first_name || player.username || `ID: ${player.user_id}`}
+                username={player.username}
+                wins={player.wins}
+                losses={player.losses}
+                points={player.points}
+                onClick={() => navigate(`/player/${player.user_id}`)}
+              />
+            ))
+          ) : (
+            <div className="text-center py-10 text-gray-400 text-sm">
+              Таблица одиночного турнира пуста. Очки идут за матчи на Lev.
+            </div>
           ))}
+
+        {activeTab === 'team' && !teamData?.teams.length && (
+          <div className="text-center py-10 text-gray-400 text-sm">
+            Командная таблица пуста. Создай команду в боте и сыграй матч.
+          </div>
+        )}
 
         {activeTab === 'team' &&
           teamData?.teams.map((team: TournamentTeam, index: number) => (

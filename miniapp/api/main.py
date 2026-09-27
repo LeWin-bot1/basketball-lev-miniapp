@@ -30,6 +30,10 @@ from .database import (
     get_team_rank,
     get_ledger_history,
     get_balance_summary,
+    ensure_player,
+    update_game_nick,
+    get_match_history,
+    compute_win_streaks,
 )
 from .models import (
     PlayerProfile,
@@ -45,7 +49,37 @@ from .models import (
     BalanceSummary,
     GlobalLeaderboard,
     LeaderboardEntry,
+    UpdateNickRequest,
+    MatchHistory,
+    MatchResult,
 )
+
+TOURNAMENT_END_DATE = "2027-06-01"
+TOURNAMENT_PRIZE_SOLO = "майка Prada"
+TOURNAMENT_PRIZE_TEAM = "10000 тг Sta"
+
+
+def _player_or_create(init_data: TelegramInitData) -> dict:
+    user_id = get_user_id_from_init_data(init_data)
+    player = get_player(user_id)
+    if player:
+        return player
+    tg = init_data.user
+    return ensure_player(
+        user_id,
+        username=(tg.username if tg else "") or "",
+        first_name=(tg.first_name if tg else "") or "",
+    )
+
+
+def _to_profile(player_data: dict) -> PlayerProfile:
+    data = dict(player_data)
+    data.pop("last_match_json", None)
+    return PlayerProfile(**data)
+
+
+def _to_match(item: dict) -> MatchResult:
+    return MatchResult(**item)
 from .websocket import (
     manager as ws_manager,
     handle_tournament_websocket,
@@ -115,41 +149,72 @@ async def get_my_profile(
     
     Требует авторизацию через Telegram initData.
     """
-    user_id = get_user_id_from_init_data(user)
+    player_data = _player_or_create(user)
+    user_id = player_data["user_id"]
     
+    rank, total_players = get_player_rank(user_id)
+    matches, _ = get_match_history(user_id, limit=20)
+    win_streak, best_win_streak = compute_win_streaks(user_id)
+    
+    return PlayerStats(
+        player=_to_profile(player_data),
+        rank=rank,
+        total_players=total_players,
+        recent_matches=[_to_match(m) for m in matches],
+        win_streak=win_streak,
+        best_win_streak=best_win_streak,
+    )
+
+
+@app.patch("/api/profile/nick", response_model=PlayerProfile)
+async def set_my_nick(
+    body: UpdateNickRequest,
+    user: TelegramInitData = Depends(get_current_user),
+):
+    """Сохранить игровой ник, который видят другие игроки."""
+    player_data = _player_or_create(user)
+    try:
+        update_game_nick(player_data["user_id"], body.game_nick)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated = get_player(player_data["user_id"])
+    return _to_profile(updated)
+
+
+@app.get("/api/matches", response_model=MatchHistory)
+async def get_my_matches(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: TelegramInitData = Depends(get_current_user),
+):
+    """Полная история матчей текущего игрока."""
+    player_data = _player_or_create(user)
+    matches, total = get_match_history(player_data["user_id"], limit, offset)
+    return MatchHistory(matches=[_to_match(m) for m in matches], total=total)
+
+
+@app.get("/api/profile/{user_id}", response_model=PlayerStats)
+async def get_player_profile(
+    user_id: int,
+    _: TelegramInitData = Depends(get_current_user)
+):
+    """Публичный профиль другого игрока: статистика и матчи."""
     player_data = get_player(user_id)
     if not player_data:
         raise HTTPException(status_code=404, detail="Player not found")
     
     rank, total_players = get_player_rank(user_id)
-    
-    player = PlayerProfile(**player_data)
+    matches, _ = get_match_history(user_id, limit=20)
+    win_streak, best_win_streak = compute_win_streaks(user_id)
     
     return PlayerStats(
-        player=player,
+        player=_to_profile(player_data),
         rank=rank,
         total_players=total_players,
-        recent_matches=[],  # TODO: добавить историю матчей
-        win_streak=0,  # TODO: вычислить серию побед
-        best_win_streak=0,
+        recent_matches=[_to_match(m) for m in matches],
+        win_streak=win_streak,
+        best_win_streak=best_win_streak,
     )
-
-
-@app.get("/api/profile/{user_id}", response_model=PlayerProfile)
-async def get_player_profile(
-    user_id: int,
-    _: TelegramInitData = Depends(get_current_user)  # Требуем авторизацию
-):
-    """
-    Получить профиль игрока по ID.
-    
-    Используется для просмотра профилей других игроков.
-    """
-    player_data = get_player(user_id)
-    if not player_data:
-        raise HTTPException(status_code=404, detail="Player not found")
-    
-    return PlayerProfile(**player_data)
 
 
 # -------------------- Leaderboard Endpoints --------------------
@@ -181,6 +246,7 @@ async def get_global_leaderboard(
             user_id=p["user_id"],
             username=p.get("username"),
             first_name=p.get("first_name"),
+            game_nick=p.get("game_nick"),
             wins=p.get("wins", 0),
             losses=p.get("losses", 0),
             rating=p.get("rating", 1000),
@@ -219,6 +285,7 @@ async def get_solo_tournament(
             user_id=p["user_id"],
             username=p.get("username"),
             first_name=p.get("first_name"),
+            game_nick=p.get("game_nick"),
             wins=p.get("wins", 0),
             losses=p.get("losses", 0),
             points=p.get("points", 0),
@@ -231,7 +298,8 @@ async def get_solo_tournament(
         players=players,
         total_participants=total,
         current_user_rank=current_rank,
-        tournament_end_date=None,  # TODO: добавить дату окончания из config
+        tournament_end_date=TOURNAMENT_END_DATE,
+        prize=TOURNAMENT_PRIZE_SOLO,
     )
 
 
@@ -269,6 +337,8 @@ async def get_team_tournament(
         teams=teams,
         total_teams=total,
         current_team_rank=current_team_rank,
+        tournament_end_date=TOURNAMENT_END_DATE,
+        prize=TOURNAMENT_PRIZE_TEAM,
     )
 
 

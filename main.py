@@ -260,6 +260,22 @@ def init_db():
           data_json TEXT NOT NULL,
           updated_at INTEGER DEFAULT (strftime('%s','now'))
         );
+
+        CREATE TABLE IF NOT EXISTS match_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          opponent_id INTEGER,
+          opponent_nick TEXT,
+          mode TEXT,
+          mode_human TEXT,
+          target INTEGER,
+          stake INTEGER,
+          you_score INTEGER DEFAULT 0,
+          opp_score INTEGER DEFAULT 0,
+          result TEXT,
+          delta_lev INTEGER DEFAULT 0,
+          played_at INTEGER DEFAULT (strftime('%s','now'))
+        );
         """
     )
     # миграции для старой схемы (если ранее таблица уже была создана)
@@ -275,6 +291,7 @@ def init_db():
         "ALTER TABLE teams ADD COLUMN tournament_points INTEGER DEFAULT 0",
         "ALTER TABLE team_members ADD COLUMN tournament_points INTEGER DEFAULT 0",
         "ALTER TABLE players ADD COLUMN stars_pending INTEGER DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS idx_match_history_user ON match_history(user_id, played_at DESC)",
         "ALTER TABLE players ADD COLUMN stars_credit INTEGER DEFAULT 0",
     ]:
         try:
@@ -338,6 +355,13 @@ def display_name(uid: int) -> str:
     row = get_player(uid)
     if not row:
         return f"user_{uid}"
+    nick = None
+    try:
+        nick = row["game_nick"]
+    except (KeyError, IndexError, TypeError):
+        nick = None
+    if nick:
+        return str(nick)
     if row["username"]:
         return f"@{row['username']}"
     return row["first_name"] or f"user_{uid}"
@@ -435,7 +459,7 @@ TURN_TIMEOUT = 90.0  # 1.5 минуты
 LEV_SCORING = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4}
 
 # турнир
-TOURNAMENT_DEADLINE_TS = int(time.mktime(time.strptime("2025-12-01", "%Y-%m-%d")))
+TOURNAMENT_DEADLINE_TS = int(time.mktime(time.strptime("2027-06-01", "%Y-%m-%d")))
 TOURNAMENT_PRIZE_SOLO = "майка Prada"
 TOURNAMENT_PRIZE_TEAM = "10000 тг Sta"
 
@@ -3365,6 +3389,31 @@ def _save_last_match(
         "UPDATE players SET last_match_json=? WHERE user_id=?",
         (json.dumps(data, ensure_ascii=False), uid),
     )
+    try:
+        conn.execute(
+            """
+            INSERT INTO match_history(
+                user_id, opponent_id, opponent_nick, mode, mode_human, target, stake,
+                you_score, opp_score, result, delta_lev, played_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                uid,
+                opp_id,
+                data["opponent_nick"],
+                data["mode"],
+                data["mode_human"],
+                data["target"],
+                data["stake"],
+                you_score,
+                opp_score,
+                result,
+                delta_lev,
+                data["ts"],
+            ),
+        )
+    except sqlite3.OperationalError:
+        logging.warning("match_history table is not ready yet")
     conn.commit()
     conn.close()
 

@@ -13,6 +13,7 @@ export interface PlayerProfile {
   matches_played: number;
   team_id?: number;
   created_at?: number;
+  stars_pending?: number;
 }
 
 export interface PlayerStats {
@@ -34,12 +35,15 @@ export interface MatchResult {
   bet_amount?: number;
   currency?: string;
   played_at?: number;
+  mode?: string;
+  delta_lev?: number;
 }
 
 export interface TournamentPlayer {
   user_id: number;
   username?: string;
   first_name?: string;
+  game_nick?: string;
   wins: number;
   losses: number;
   points: number;
@@ -51,6 +55,7 @@ export interface TournamentLeaderboard {
   total_participants: number;
   current_user_rank?: number;
   tournament_end_date?: string;
+  prize?: string;
 }
 
 export interface TeamMember {
@@ -88,6 +93,8 @@ export interface TeamLeaderboard {
   teams: TournamentTeam[];
   total_teams: number;
   current_team_rank?: number;
+  tournament_end_date?: string;
+  prize?: string;
 }
 
 export interface LedgerEntry {
@@ -121,6 +128,7 @@ export interface LeaderboardEntry {
   user_id: number;
   username?: string;
   first_name?: string;
+  game_nick?: string;
   wins: number;
   losses: number;
   rating: number;
@@ -134,6 +142,11 @@ export interface GlobalLeaderboard {
   page: number;
   per_page: number;
   total_pages: number;
+}
+
+export interface MatchHistory {
+  matches: MatchResult[];
+  total: number;
 }
 
 // Типы для Telegram

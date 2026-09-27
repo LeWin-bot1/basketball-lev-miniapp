@@ -6,6 +6,7 @@ import LeaderboardPage from './pages/LeaderboardPage';
 import TournamentsPage from './pages/TournamentsPage';
 import TeamPage from './pages/TeamPage';
 import HistoryPage from './pages/HistoryPage';
+import PlayerViewPage from './pages/PlayerViewPage';
 
 function App() {
   const { isReady, user } = useTelegram();
@@ -32,6 +33,7 @@ function App() {
           <Route path="tournaments" element={<TournamentsPage />} />
           <Route path="team" element={<TeamPage />} />
           <Route path="history" element={<HistoryPage />} />
+          <Route path="player/:userId" element={<PlayerViewPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -8,6 +8,7 @@ import type {
   TeamInfo,
   BalanceSummary,
   FinanceHistory,
+  MatchHistory,
 } from '../types';
 
 // Базовый URL API (в production заменить на реальный)
@@ -54,8 +55,22 @@ export async function getMyProfile(): Promise<PlayerStats> {
   return fetchApi<PlayerStats>('/profile');
 }
 
-export async function getPlayerProfile(userId: number): Promise<PlayerProfile> {
-  return fetchApi<PlayerProfile>(`/profile/${userId}`);
+export async function getPlayerProfile(userId: number): Promise<PlayerStats> {
+  return fetchApi<PlayerStats>(`/profile/${userId}`);
+}
+
+export async function updateMyNick(gameNick: string): Promise<PlayerProfile> {
+  return fetchApi<PlayerProfile>('/profile/nick', {
+    method: 'PATCH',
+    body: JSON.stringify({ game_nick: gameNick }),
+  });
+}
+
+export async function getMyMatches(
+  limit: number = 50,
+  offset: number = 0
+): Promise<MatchHistory> {
+  return fetchApi<MatchHistory>(`/matches?limit=${limit}&offset=${offset}`);
 }
 
 // ==================== Leaderboard API ====================
@@ -118,6 +133,10 @@ export const api = {
   profile: {
     getMy: getMyProfile,
     getById: getPlayerProfile,
+    updateNick: updateMyNick,
+  },
+  matches: {
+    getMy: getMyMatches,
   },
   leaderboard: {
     get: getLeaderboard,

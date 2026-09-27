@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { api } from '../api/client';
 import type { GlobalLeaderboard, LeaderboardEntry } from '../types';
@@ -25,6 +26,7 @@ const mockLeaderboard: GlobalLeaderboard = {
 };
 
 export default function LeaderboardPage() {
+  const navigate = useNavigate();
   const [leaderboard, setLeaderboard] = useState<GlobalLeaderboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -90,12 +92,13 @@ export default function LeaderboardPage() {
           <LeaderboardRow
             key={entry.user_id}
             rank={entry.rank}
-            name={entry.first_name || entry.username || `ID: ${entry.user_id}`}
+            name={entry.game_nick || entry.first_name || entry.username || `ID: ${entry.user_id}`}
             username={entry.username}
             wins={entry.wins}
             losses={entry.losses}
             rating={entry.rating}
             isCurrentUser={entry.is_current_user}
+            onClick={() => navigate(`/player/${entry.user_id}`)}
           />
         ))}
       </div>
