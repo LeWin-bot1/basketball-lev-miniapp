@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+.idea/
+node_modules/
+miniapp/frontend/dist/.git
+lews/
+*.mov
+*.mp4
