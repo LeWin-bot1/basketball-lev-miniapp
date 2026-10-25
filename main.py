@@ -456,7 +456,12 @@ DEFAULT_STAKE_LEV = 25
 BOT_ID = 0
 TURN_TIMEOUT = 90.0  # 1.5 минуты
 
-LEV_SCORING = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4}
+LEV_SCORING = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4}  # старая система очков (больше не используется)
+
+# Новая система: игра на попадание.
+# Телеграм-кубик 🏀 даёт 1–5; значения 4 и 5 — мяч в корзине.
+HIT_VALUES = {4, 5}
+GAME_TARGET = 1  # формат «на попадание» (поле target оставлено для совместимости)
 
 # турнир
 TOURNAMENT_DEADLINE_TS = int(time.mktime(time.strptime("2027-06-01", "%Y-%m-%d")))
@@ -479,12 +484,14 @@ class Match:
     created_at: float = field(default_factory=time.time)
     first_throw_done: Dict[int, bool] = field(default_factory=dict)
     last_turn_change_ts: float = field(default_factory=time.time)
+    # кто попал и ждёт ответа соперника (None — никто)
+    pending_hit: Optional[int] = None
 
 
 matches: Dict[str, Match] = {}
 
 # обычный матчмейкинг на Lev
-mm_queue: Dict[int, List[str]] = {6: [], 9: [], 18: []}
+mm_queue: Dict[int, List[str]] = {GAME_TARGET: [], 6: [], 9: [], 18: []}
 
 # матчмейкинг на звёзды: ключ (stake:target) -> список матчей
 stars_queue: Dict[str, List[str]] = {}
@@ -855,13 +862,8 @@ async def lev_purchases_history_btn(update: Update, context: ContextTypes.DEFAUL
 
 
 def goals_menu(mode: str) -> InlineKeyboardMarkup:
-    """Меню выбора цели матча (до скольких очков). Для звёзд свои значения."""
-    if mode == "stars":
-        goals = STARS_GOAL_POINTS
-    else:
-        goals = GOAL_POINTS
-
-    rows = [[InlineKeyboardButton(f"До {g}", callback_data=f"goal:{mode}:{g}") for g in goals]]
+    """Кнопка старта матча. Игра идёт на попадание, выбора очков больше нет."""
+    rows = [[InlineKeyboardButton("🏀 Начать матч", callback_data=f"goal:{mode}:{GAME_TARGET}")]]
     rows.append([InlineKeyboardButton("🏠 В главное меню", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -947,8 +949,8 @@ async def profile_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             delta = lm.get("delta_lev", 0)
             delta_str = f"+{delta}" if delta > 0 else (f"{delta}" if delta < 0 else "0")
             last = (
-                f"{lm.get('mode_human','Матч')} до {lm.get('target')} | "
-                f"Счёт: {lm.get('you_score')}-{lm.get('opp_score')} | "
+                f"{lm.get('mode_human','Матч')} | "
+                f"Попадания: {lm.get('you_score')}-{lm.get('opp_score')} | "
                 f"Соперник: {lm.get('opponent_nick','—')} | "
                 f"Итог по Lev: {delta_str}"
             )
@@ -1023,14 +1025,13 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "(СБП/КАРТА) в разделе «✏️ Реквизиты» при первом входе в бот.\n"
         "Без сохранённых реквизитов бот не сможет вывести тебе ни звёзды, ни деньги, "
         "а также не допустит до игр с другими игроками и покупки Lev.\n\n"
-        "🎯 <b>Цель матча</b>\n"
-        "• Игра идёт до 6, 9 или 18 очков (режим Lev).\n"
-        "• В режиме звёзд — до 6, 8 или 12 очков.\n"
-        "• У обоих игроков всегда <b>равное количество бросков</b>.\n"
-        "• Раунд заканчивается только после того, как оба сделали одинаковое число бросков.\n\n"
-        "🏀 <b>Очки за бросок</b>\n"
-        "Телеграм-кубик (🏀) даёт значение 1–5, бот переводит это в очки:\n"
-        "1 → 0 очков\n2 → 1 очко\n3 → 2 очка\n4 → 3 очка\n5 → 4 очка\n\n"
+        "🎯 <b>Как идёт игра</b>\n"
+        "• Игра идёт <b>на попадание</b>, очков нет.\n"
+        "• Игроки бросают мяч 🏀 по очереди.\n"
+        "• Если ты попал — у соперника есть <b>один бросок</b>, чтобы ответить.\n"
+        "• Соперник не попал — ты победил.\n"
+        "• Соперник тоже попал — игра продолжается, пока кто-то не забьёт, "
+        "а второй не сможет отыграться.\n\n"
         "⏱ <b>Ограничение по времени</b>\n"
         "• На каждый ход даётся <b>1.5 минуты</b>.\n"
         "• Если игрок не успевает сделать бросок — он получает <b>техническое поражение по времени</b>.\n"
@@ -1042,7 +1043,7 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Дуэль на звёзды: бот создаёт банк звёзд; победитель забирает весь банк.\n\n"
         "⭐ <b>Дуэли на звёзды</b>\n"
         "• Доступные ставки: 1, 25 и 50 звёзд с игрока.\n"
-        "• Игра идёт до 6, 8 или 12 очков.\n"
+        "• Игра идёт на попадание, как и обычные матчи.\n"
         "• После победы звёзды начисляются на баланс «долг бота» (в профиле), "
         "а затем ты можешь подать заявку на их вывод.\n\n"
         "👥 <b>Команды</b>\n"
@@ -1064,7 +1065,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ℹ️ Кратко:\n"
         "• Выбирай режим: матчмейкинг, дуэль с другом, тренировка или дуэль на звёзды.\n"
         "• Бросай баскетбольный мяч в корзинку с помощью стикера 🏀.\n"
-        "• Цель — набрать 6/9/18 (Lev) или 6/8/12 (звёзды) очков, при равном числе бросков.\n"
+        "• Игра на попадание: попал — у соперника один шанс ответить. Не ответил — ты победил.\n"
         "• На ход 1.5 минуты, иначе — поражение по времени.\n\n"
         "Подробные правила: /rules\n"
         "Поддержка: /support"
@@ -1111,13 +1112,13 @@ async def rules_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "(СБП/КАРТА) в разделе «✏️ Реквизиты» при первом входе в бот.\n"
         "Без сохранённых реквизитов бот не сможет вывести тебе ни звёзды, ни деньги, "
         "а также не допустит до игр с другими игроками и покупки Lev.\n\n"
-        "🎯 <b>Цель матча</b>\n"
-        "• Режим Lev: до 6, 9 или 18 очков.\n"
-        "• Режим звёзд: до 6, 8 или 12 очков.\n"
-        "• У обоих игроков всегда <b>равное количество бросков</b>.\n"
-        "• Раунд заканчивается только после того, как оба сделали одинаковое число бросков.\n\n"
-        "🏀 <b>Очки за бросок</b>\n"
-        "Телеграм-кубик (🏀) даёт значение 1–5, бот переводит это в очки.\n\n"
+        "🎯 <b>Как идёт игра</b>\n"
+        "• Игра идёт <b>на попадание</b>, очков нет.\n"
+        "• Игроки бросают мяч 🏀 по очереди.\n"
+        "• Если ты попал — у соперника есть <b>один бросок</b>, чтобы ответить.\n"
+        "• Соперник не попал — ты победил.\n"
+        "• Соперник тоже попал — игра продолжается, пока кто-то не забьёт, "
+        "а второй не сможет отыграться.\n\n"
         "⏱ <b>Ограничение по времени</b>\n"
         "• На каждый ход даётся <b>1.5 минуты</b>.\n"
         "• Если игрок не успевает сделать бросок — он получает <b>техническое поражение по времени</b>.\n\n"
@@ -1346,7 +1347,7 @@ async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.user_data["friend_stake"] = stake
         return await update.message.reply_text(
-            f"Сумма для дуэли: {stake} Lev.\nТеперь выбери цель матча:",
+            f"Сумма для дуэли: {stake} Lev.\nИгра на попадание. Жми, чтобы создать дуэль:",
             reply_markup=goals_menu("friend"),
         )
 
@@ -2638,13 +2639,8 @@ async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
         )
 
-    # Остальные режимы сразу переходят к выбору цели
-    await delete_and_send_new(
-        q,
-        f"Режим: <b>{pretty_mode(mode)}</b>\nВыберите до скольких очков:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=goals_menu(mode),
-    )
+    # Остальные режимы стартуют сразу — игра на попадание, цель выбирать не нужно
+    return await choose_goal(update, context, mode=mode)
 
 
 async def stars_menu_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2684,9 +2680,9 @@ async def stars_menu_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     kb = [
-        [InlineKeyboardButton("1 ⭐ · до 6 очков", callback_data="stars_join:1:6")],
-        [InlineKeyboardButton("25 ⭐ · до 8 очков", callback_data="stars_join:25:8")],
-        [InlineKeyboardButton("50 ⭐ · до 12 очков", callback_data="stars_join:50:12")],
+        [InlineKeyboardButton("1 ⭐ · на попадание", callback_data=f"stars_join:1:{GAME_TARGET}")],
+        [InlineKeyboardButton("25 ⭐ · на попадание", callback_data=f"stars_join:25:{GAME_TARGET}")],
+        [InlineKeyboardButton("50 ⭐ · на попадание", callback_data=f"stars_join:50:{GAME_TARGET}")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
     ]
     markup = InlineKeyboardMarkup(kb)
@@ -2723,11 +2719,13 @@ async def schedule_turn_timeout(
     await finish_timeout_loss(m, loser_id, context)
 
 
-async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: Optional[str] = None):
     q = update.callback_query
-    await q.answer()
-    _, mode, t = q.data.split(":")
-    target = int(t)
+    if mode is None:
+        await q.answer()
+        _, mode, _t = q.data.split(":")
+    # игра всегда на попадание (старые кнопки «до N» тоже ведут сюда)
+    target = GAME_TARGET
 
     # ---------- ТРЕНИРОВКА ----------
     if mode == "train":
@@ -2748,7 +2746,7 @@ async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         matches[mid] = m
         await q.edit_message_text(
-            f"🎓 Тренировка до {target}. Ваш ход — бросайте!",
+            f"🎓 Тренировка на попадание. Ваш ход — бросайте!",
             reply_markup=None,
         )
         await context.bot.send_message(
@@ -2805,7 +2803,7 @@ async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mode == "mm":
         mm_queue[target].append(mid)
         await q.edit_message_text(
-            f"🎯 Вы в очереди (до {target}). Ставка списана: {stake} Lev. Ждём соперника…",
+            f"🎯 Вы в очереди (игра на попадание). Ставка списана: {stake} Lev. Ждём соперника…",
             reply_markup=back_to_main_kb(),
         )
         asyncio.create_task(
@@ -2825,7 +2823,7 @@ async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     me = await context.bot.get_me()
     link = f"https://t.me/{me.username}?start=invite_{token}"
     await q.edit_message_text(
-        f"🤝 Дуэль до {target}.\n"
+        f"🤝 Дуэль на попадание.\n"
         f"Ставка списана: {stake} Lev.\n\n"
         f"Отправь другу эту ссылку:\n{link}\n\n"
         "Как друг подтвердит — матч начнётся.",
@@ -2844,7 +2842,7 @@ async def stars_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     _, stake_s, target_s = q.data.split(":")
     stake = int(stake_s)
-    target = int(target_s)
+    target = GAME_TARGET  # игра на попадание
 
     mid = secrets.token_hex(6)
     m = Match(
@@ -2867,7 +2865,7 @@ async def stars_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(
         f"⭐ Вы в очереди на дуэль на звёзды.\n"
         f"Ставка: {stake} ⭐ с игрока (банк: {stake * 2} ⭐).\n"
-        f"Игра до {target} очков.\n\n"
+        "Игра на попадание.\n\n"
         "Ждём соперника…",
         reply_markup=back_to_main_kb(),
     )
@@ -2920,7 +2918,7 @@ async def announce_start(context: ContextTypes.DEFAULT_TYPE, m: Match):
 
     await context.bot.send_message(
         m.p1,
-        f"🔥 Матч начат! До {m.target}. Ставка: {stake_text}.\nПервый ход: {first_name}\n"
+        f"🔥 Матч начат! Игра на попадание. Ставка: {stake_text}.\nПервый ход: {first_name}\n"
         f"Это ваш 1-й бросок.\n\n"
         "⏱ На каждый ход даётся 1.5 минуты. Не успеешь — тех.поражение по времени.",
         reply_markup=play_controls(m.match_id, first=True),
@@ -2931,7 +2929,7 @@ async def announce_start(context: ContextTypes.DEFAULT_TYPE, m: Match):
         m.first_throw_done.setdefault(m.p2, False)
         await context.bot.send_message(
             m.p2,
-            f"🔥 Матч начат! До {m.target}. Ставка: {stake_text}.\nПервый ход: {first_name}\n"
+            f"🔥 Матч начат! Игра на попадание. Ставка: {stake_text}.\nПервый ход: {first_name}\n"
             "⏱ На каждый ход даётся 1.5 минуты.",
             reply_markup=back_to_main_kb(),
         )
@@ -3020,14 +3018,14 @@ async def send_stars_payment_request(context: ContextTypes.DEFAULT_TYPE, m: Matc
         token = secrets.token_hex(4)
         payload = f"stars_match_start:{mid}:{uid}:{stake}:{target}:{token}"
 
-        prices = [LabeledPrice(label=f"Дуэль на звёзды до {target}", amount=stake)]
+        prices = [LabeledPrice(label="Дуэль на звёзды", amount=stake)]
 
         await context.bot.send_invoice(
             chat_id=uid,
             title=f"Дуэль на звёзды (ставка {stake} ⭐)",
             description=(
                 f"Матч найден! Оплата участия: {stake} Telegram Stars.\n"
-                f"Игра до {target} очков. Матч начнётся, когда оба игрока оплатят."
+                "Игра на попадание. Матч начнётся, когда оба игрока оплатят."
             ),
             payload=payload,
             provider_token="",   # для Stars можно оставить пустым
@@ -3145,7 +3143,7 @@ async def start_deeplink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             creator_name = display_name(creator_id)
             text = (
-                f"🤝 Приглашение в дуэль до {target} очков.\n"
+                "🤝 Приглашение в дуэль на попадание.\n"
                 f"Ставка: {stake} Lev.\n"
                 f"Соперник: {creator_name}\n\n"
                 "Вы действительно хотите сыграть?"
@@ -3209,7 +3207,52 @@ async def start_deeplink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await start(update, context)
 
 
-# ---------- THROW LOGIC WITH TIMEOUT + ВИДИМЫЕ БРОСКИ СОПЕРНИКА ----------
+# ---------- THROW LOGIC: ИГРА НА ПОПАДАНИЕ ----------
+# Правила:
+#  • игроки бросают по очереди;
+#  • если игрок попал, у соперника есть ОДИН бросок, чтобы ответить;
+#  • соперник не попал → побеждает тот, кто попал;
+#  • соперник тоже попал → игра продолжается как обычно, пока кто-то
+#    не забьёт, а второй не сможет отыграться.
+
+def resolve_throw(m: Match, uid: int, hit: bool) -> tuple[Optional[int], str]:
+    """
+    Применяет бросок к состоянию матча.
+    Возвращает (победитель или None, исход):
+      "answered"       — ответил на попадание соперника, игра продолжается
+      "failed_answer"  — не смог ответить, соперник победил
+      "hit"            — попал, у соперника один шанс ответить
+      "miss"           — промах, ход переходит
+    """
+    opp = opponent_of(m, uid)
+    if m.pending_hit is not None and m.pending_hit == opp:
+        m.pending_hit = None
+        if hit:
+            return None, "answered"
+        return opp, "failed_answer"
+    if hit:
+        m.pending_hit = uid
+        return None, "hit"
+    return None, "miss"
+
+
+def throw_result_text(outcome: str, *, me: bool, name: str = "") -> str:
+    """Текст об итоге броска: для бросившего (me=True) или для соперника."""
+    if me:
+        return {
+            "answered": "✅ Попал! Ты отыгрался — игра продолжается.",
+            "failed_answer": "❌ Мимо… Отыграться не получилось.",
+            "hit": "🎯 Попадание! Теперь у соперника один шанс ответить.",
+            "miss": "❌ Мимо. Ход переходит к сопернику.",
+        }[outcome]
+    return {
+        "answered": f"✅ {name} отыгрался! Игра продолжается.",
+        "failed_answer": f"❌ {name} не смог отыграться.",
+        "hit": f"🎯 {name} попал! У тебя один бросок, чтобы ответить.",
+        "miss": f"❌ {name} промахнулся.",
+    }[outcome]
+
+
 async def throw_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -3223,138 +3266,100 @@ async def throw_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     if uid not in m.score:
         return await q.answer("Вы не участник этого матча.", show_alert=True)
-    if m.mode != "train" and m.turn != uid:
+    if m.turn != uid:
         return await q.answer("Сейчас не ваш ход.", show_alert=True)
+
+    # убираем кнопку броска, чтобы не нажали дважды
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     # Бросок текущим игроком
     sent: Message = await context.bot.send_dice(
         chat_id=q.message.chat_id, emoji="🏀"
     )
-    val = sent.dice.value
-    gained = LEV_SCORING.get(val, 0)
-    m.score[uid] = m.score.get(uid, 0) + gained
+    hit = sent.dice.value in HIT_VALUES
+    if hit:
+        m.score[uid] = m.score.get(uid, 0) + 1
     m.throws[uid] = m.throws.get(uid, 0) + 1
     m.first_throw_done[uid] = True
-    # обновляем время последнего действия для текущего хода
     m.last_turn_change_ts = time.time()
-    await asyncio.sleep(2.0)
+    await asyncio.sleep(2.0)  # ждём окончания анимации
 
-    # информация для бросившего
-    your_score = m.score[uid]
-    remaining = max(0, m.target - your_score)
-    throw_num = m.throws[uid]
+    winner, outcome = resolve_throw(m, uid, hit)
+    await context.bot.send_message(q.message.chat_id, throw_result_text(outcome, me=True))
 
-    if remaining > 0:
-        if remaining <= 3:
-            motivation = f"Осталось всего {remaining} очк. до победы — жми! 💪"
-        else:
-            motivation = f"До победы осталось {remaining} очк."
-    else:
-        motivation = "Вы достигли или превысили цель по очкам!"
+    opp_id = opponent_of(m, uid)
+    if m.mode != "train" and opp_id:
+        await context.bot.send_message(
+            opp_id, throw_result_text(outcome, me=False, name=display_name(uid))
+        )
 
-    score_text = (
-        f"+{gained} очк. | Счёт {m.score.get(m.p1, 0)}–{m.score.get(m.p2, 0)} (до {m.target}).\n"
-        f"Это ваш {throw_num}-й бросок.\n"
-        f"{motivation}"
-    )
-    await context.bot.send_message(q.message.chat_id, score_text)
-
-    # 🔔 Показываем бросок соперника — уведомление второму игроку
-    if m.mode not in ("train",):
-        opp_id = opponent_of(m, uid)
-        if opp_id:
-            await context.bot.send_message(
-                opp_id,
-                f"{display_name(uid)} сделал бросок.\n"
-                f"Выпало: {val} (это +{gained} очк.).\n"
-                f"Текущий счёт: {m.score.get(m.p1, 0)}–{m.score.get(m.p2, 0)} (до {m.target}).",
-            )
+    if winner is not None:
+        await finish_match(m, winner, context)
+        return
 
     # ---------- ТРЕНИРОВКА: ход бота ----------
     if m.mode == "train":
-        if not equal_throws(m):
-            await asyncio.sleep(1.2)
-            bot_msg: Message = await context.bot.send_dice(
-                chat_id=q.message.chat_id, emoji="🏀"
-            )
-            bval = bot_msg.dice.value
-            bgain = LEV_SCORING.get(bval, 0)
-            m.score[BOT_ID] += bgain
-            m.throws[BOT_ID] += 1
-            await asyncio.sleep(2.0)
-            await context.bot.send_message(
-                q.message.chat_id,
-                f"+{bgain} очк. (бот) | Счёт {m.score.get(m.p1, 0)}–{m.score.get(m.p2, 0)} (до {m.target}).",
-            )
+        await asyncio.sleep(1.2)
+        bot_msg: Message = await context.bot.send_dice(
+            chat_id=q.message.chat_id, emoji="🏀"
+        )
+        bhit = bot_msg.dice.value in HIT_VALUES
+        if bhit:
+            m.score[BOT_ID] = m.score.get(BOT_ID, 0) + 1
+        m.throws[BOT_ID] = m.throws.get(BOT_ID, 0) + 1
+        await asyncio.sleep(2.0)
 
-        if equal_throws(m) and (
-            m.score[m.p1] >= m.target or m.score[m.p2] >= m.target
-        ):
-            try:
-                await q.edit_message_reply_markup(reply_markup=None)
-            except Exception:
-                pass
-            if m.score[m.p1] >= m.target and m.score[m.p2] >= m.target:
-                await finish_draw(m, context)
-            else:
-                winner = m.p1 if m.score[m.p1] >= m.target else m.p2
-                await finish_match(m, winner, context)
+        winner, boutcome = resolve_throw(m, BOT_ID, bhit)
+        await context.bot.send_message(
+            q.message.chat_id, throw_result_text(boutcome, me=False, name="Бот")
+        )
+        if winner is not None:
+            await finish_match(m, winner, context)
             return
 
-        # иначе снова ход игрока
-        next_num = m.throws.get(m.p1, 0) + 1
+        # снова ход игрока
+        m.turn = m.p1
+        m.last_turn_change_ts = time.time()
+        prompt = (
+            "Бросай — это твой шанс отыграться!"
+            if m.pending_hit == BOT_ID
+            else "Твой ход — бросай!"
+        )
         await context.bot.send_message(
             q.message.chat_id,
-            f"Ваш ход! Это ваш {next_num}-й бросок.\n"
-            "⏱ На ход 1.5 минуты.",
-            reply_markup=play_controls(
-                m.match_id, first=not m.first_throw_done.get(m.p1, False)
-            ),
+            f"{prompt}\n⏱ На ход 1.5 минуты.",
+            reply_markup=play_controls(m.match_id, first=False),
         )
-        # таймер на следующий ход (только человек)
-        m.last_turn_change_ts = time.time()
         asyncio.create_task(
             schedule_turn_timeout(m.match_id, m.p1, m.last_turn_change_ts, context)
         )
         return
 
     # ---------- PvP: смена хода ----------
-    m.turn = m.p2 if uid == m.p1 else m.p1
+    next_player = opp_id
+    m.turn = next_player
     m.last_turn_change_ts = time.time()
 
-    # Проверка конца матча при равных бросках
-    if equal_throws(m) and (
-        m.score[m.p1] >= m.target or m.score[m.p2] >= m.target
-    ):
-        try:
-            await q.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        if m.score[m.p1] >= m.target and m.score[m.p2] >= m.target:
-            await finish_draw(m, context)
-        else:
-            winner = m.p1 if m.score[m.p1] >= m.target else m.p2
-            await finish_match(m, winner, context)
-        return
-
-    # иначе ход соперника
-    next_player = m.turn
-    next_num = m.throws.get(next_player, 0) + 1
+    if m.pending_hit == uid:
+        prompt = f"{display_name(next_player)}, бросай — это твой шанс отыграться!"
+    else:
+        prompt = f"Сейчас твой ход, {display_name(next_player)}!"
     await context.bot.send_message(
         next_player,
-        f"Сейчас твой ход, {display_name(next_player)}! "
-        f"Это твой {next_num}-й бросок.\n"
-        "⏱ На ход 1.5 минуты.",
+        f"{prompt}\n⏱ На ход 1.5 минуты.",
         reply_markup=play_controls(
             m.match_id, first=not m.first_throw_done.get(next_player, False)
         ),
     )
-    # таймер хода для соперника
+    await context.bot.send_message(uid, "Ход соперника. Ждём его бросок…")
     asyncio.create_task(
-        schedule_turn_timeout(
-            m.match_id, next_player, m.last_turn_change_ts, context
-        )
+        schedule_turn_timeout(m.match_id, next_player, m.last_turn_change_ts, context)
     )
+
+
 # ---------- FINISH MATCH ----------
 # ---------- SAVE LAST MATCH + TOURNAMENT STATS ----------
 
@@ -3499,8 +3504,9 @@ async def finish_match(m: Match, winner_id: int, context: ContextTypes.DEFAULT_T
         )
 
         text = (
-            f"🎉 Тренировка завершена!\n"
-            f"Счёт {human_score}–{bot_score} (до {m.target}).\n"
+            ("🎉 Победа в тренировке!\n" if winner_id == human_id
+             else "🤖 В этот раз победил бот.\n")
+            + f"Попадания: {human_score}–{bot_score}.\n"
             "Отличная игра!"
         )
 
@@ -3560,13 +3566,13 @@ async def finish_match(m: Match, winner_id: int, context: ContextTypes.DEFAULT_T
 
         winner_msg = (
             "🎉 Победа в дуэли на звёзды!\n"
-            f"Счёт: {s(m.p1)}–{s(m.p2)} (до {m.target}).\n"
+            f"Попадания: {s(winner_id)}–{s(loser_id)}.\n"
             f"Вы выиграли {pot_stars} ⭐.\n\n"
             "Звёзды начислены в баланс «долг бота» (см. профиль)."
         )
         loser_msg = (
             "💪 Хорошая игра!\n"
-            f"Счёт: {s(m.p1)}–{s(m.p2)} (до {m.target}).\n"
+            f"Попадания: {s(loser_id)}–{s(winner_id)}.\n"
             "В этот раз победа за соперником."
         )
 
@@ -3629,12 +3635,13 @@ async def finish_match(m: Match, winner_id: int, context: ContextTypes.DEFAULT_T
 
     winner_msg = (
         "🎉 Великолепно! Вы победили!\n"
-        f"Итог: {s(m.p1)}–{s(m.p2)} (до {m.target}).\n"
+        f"Попадания: {s(winner_id)}–{s(loser_id)}.\n"
         f"+{delta_win} Lev! Баланс: {winner_balance} Lev."
     )
     loser_msg = (
         "💪 Хорошая игра!\n"
-        f"Итог: {s(m.p1)}–{s(m.p2)} (до {m.target})."
+        f"Попадания: {s(loser_id)}–{s(winner_id)}.\n"
+        "Соперник попал, а ответить не получилось."
     )
 
     kb = end_controls(m.match_id, draw=False)
@@ -3723,11 +3730,11 @@ async def finish_draw(m: Match, context: ContextTypes.DEFAULT_TYPE):
 
     if m.mode == "stars":
         text = (
-            f"🤝 Ничья! Счёт {s(p1)}–{s(p2)} (до {m.target}).\n"
+            f"🤝 Ничья! Счёт {s(p1)}–{s(p2)}.\n"
             "Ни у кого нет выигрышных ⭐ — можно взять реванш!"
         )
     else:
-        text = f"🤝 Ничья! Счёт {s(p1)}–{s(p2)} (до {m.target})."
+        text = f"🤝 Ничья! Счёт {s(p1)}–{s(p2)}."
 
     kb = end_controls(m.match_id, draw=True)
     await safe_send(p1, text, reply_markup=kb)
@@ -3926,9 +3933,8 @@ async def rematch_offer_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return await q.answer("Ошибка данных последнего матча.", show_alert=True)
 
-    # базовая валидация
-    if target <= 0:
-        return await q.answer("Некорректная цель матча.", show_alert=True)
+    # игра теперь всегда на попадание
+    target = GAME_TARGET
 
     # если соперник некорректный — не пытаемся отправлять
     if opponent_id in (0, None) or opponent_id == q.from_user.id:
@@ -3956,10 +3962,10 @@ async def rematch_offer_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # edit может упасть если исходное сообщение было фото/подпись
         try:
-            await q.edit_message_text(f"🎓 Тренировка до {target}. Ваш ход!", reply_markup=None)
+            await q.edit_message_text("🎓 Тренировка на попадание. Ваш ход!", reply_markup=None)
         except Exception:
             try:
-                await q.message.reply_text(f"🎓 Тренировка до {target}. Ваш ход!")
+                await q.message.reply_text("🎓 Тренировка на попадание. Ваш ход!")
             except Exception:
                 pass
 
@@ -3999,7 +4005,7 @@ async def rematch_offer_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 opponent_id,
-                f"🔁 Реванш в звёздной дуэли!\nДо {target}, ставка {stake} ⭐.\n"
+                f"🔁 Реванш в звёздной дуэли!\nНа попадание, ставка {stake} ⭐.\n"
                 f"Инициатор: {display_name(q.from_user.id)}",
                 reply_markup=kb,
             )
@@ -4046,7 +4052,7 @@ async def rematch_offer_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             opponent_id,
-            f"🔁 Реванш!\nДо {target}, ставка {stake} Lev.\n"
+            f"🔁 Реванш!\nНа попадание, ставка {stake} Lev.\n"
             f"Инициатор: {display_name(q.from_user.id)}",
             reply_markup=kb,
         )
@@ -4110,13 +4116,13 @@ async def rematch_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             p_from,
-            f"🔥 Реванш (⭐) начат! До {target}. Ставка {stake} ⭐.\n"
+            f"🔥 Реванш (⭐) начат! На попадание. Ставка {stake} ⭐.\n"
             f"Первый ход: {first_name}",
             reply_markup=play_controls(mid, first=True),
         )
         await context.bot.send_message(
             p_to,
-            f"🔥 Реванш (⭐) начат! До {target}. Ставка {stake} ⭐.\n"
+            f"🔥 Реванш (⭐) начат! На попадание. Ставка {stake} ⭐.\n"
             f"Первый ход: {first_name}",
             reply_markup=back_to_main_kb(),
         )
@@ -4165,13 +4171,13 @@ async def rematch_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
         p_from,
-        f"🔥 Реванш начат! До {target}. Ставка {stake} Lev.\n"
+        f"🔥 Реванш начат! На попадание. Ставка {stake} Lev.\n"
         f"Первый ход: {first_name}",
         reply_markup=play_controls(mid, first=True),
     )
     await context.bot.send_message(
         p_to,
-        f"🔥 Реванш начат! До {target}. Ставка {stake} Lev.\n"
+        f"🔥 Реванш начат! На попадание. Ставка {stake} Lev.\n"
         f"Первый ход: {first_name}",
         reply_markup=back_to_main_kb(),
     )
