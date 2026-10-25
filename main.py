@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 import os
 import secrets
@@ -626,15 +627,67 @@ def pop_menu(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     return stack[-1]         # вернуться к предыдущему
 
 
-def has_requisites(uid: int) -> bool:
-    """Проверить, сохранил ли игрок реквизиты для вывода."""
+# -------------------- КРИПТО-РЕКВИЗИТЫ --------------------
+# Тип -> (подпись кнопки, префикс в сохранённой строке)
+REQ_TYPES = {
+    "trc20": ("💵 USDT · TRC20 (Tron)", "USDT-TRC20"),
+    "ton": ("💎 USDT / TON · сеть TON", "TON"),
+    "cryptobot": ("🤖 Аккаунт @CryptoBot", "CRYPTOBOT"),
+}
+CRYPTO_REQ_PREFIXES = tuple(f"{pref}:" for _lbl, pref in REQ_TYPES.values())
+
+_TRC20_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+_TON_FRIENDLY_RE = re.compile(r"^(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}$")
+_TON_RAW_RE = re.compile(r"^-?\d+:[0-9a-fA-F]{64}$")
+
+
+def valid_crypto_address(req_type: str, addr: str) -> bool:
+    addr = addr.strip()
+    if req_type == "trc20":
+        return bool(_TRC20_RE.match(addr))
+    if req_type == "ton":
+        return bool(_TON_FRIENDLY_RE.match(addr) or _TON_RAW_RE.match(addr))
+    return False
+
+
+def is_crypto_requisites(text: Optional[str]) -> bool:
+    return bool(text) and text.startswith(CRYPTO_REQ_PREFIXES)
+
+
+def get_requisites(uid: int) -> Optional[str]:
+    """Сохранённые крипто-реквизиты игрока (старые СБП/КАРТА не считаются)."""
     conn = db()
     row = conn.execute(
         "SELECT saved_requisites FROM players WHERE user_id=?",
         (uid,),
     ).fetchone()
     conn.close()
-    return bool(row and row["saved_requisites"])
+    saved = row["saved_requisites"] if row else None
+    return saved if is_crypto_requisites(saved) else None
+
+
+def has_requisites(uid: int) -> bool:
+    """Проверить, сохранил ли игрок крипто-реквизиты для вывода."""
+    return get_requisites(uid) is not None
+
+
+def requisites_type_kb(cancel_cb: str = "menu") -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(lbl, callback_data=f"req_type:{t}")]
+        for t, (lbl, _pref) in REQ_TYPES.items()
+    ]
+    rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data=cancel_cb)])
+    return InlineKeyboardMarkup(rows)
+
+
+def need_requisites_text(reason: str) -> str:
+    return (
+        f"‼️ {reason}\n\n"
+        "Выигрыш выводится только в криптовалюте. Выбери, куда выводить:\n"
+        "• USDT в сети TRC20 (Tron)\n"
+        "• USDT или TON в сети TON (Telegram Wallet, Tonkeeper)\n"
+        "• на аккаунт @CryptoBot (без адреса)"
+    )
 
 
 def is_admin(uid: int) -> bool:
@@ -642,8 +695,8 @@ def is_admin(uid: int) -> bool:
 
 
 def valid_requisites(text: str) -> bool:
-    t = text.strip().lower()
-    return t.startswith("сбп ") or t.startswith("карта ")
+    """Совместимость: валидны только крипто-реквизиты."""
+    return is_crypto_requisites(text.strip())
 
 
 def withdraw_status_ru(code: str) -> str:
@@ -801,7 +854,7 @@ async def stars_money_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"⭐ Выигранные звёзды (долг бота): {stars_pending}\n\n"
         "Чтобы вывести звёзды, можно использовать кнопку ниже.\n"
-        "⚠️ Перед выводом обязательно укажи корректные реквизиты (СБП/КАРТА)."
+        "⚠️ Перед выводом обязательно укажи крипто-реквизиты в «✏️ Реквизиты»."
     )
 
     kb = [
@@ -913,12 +966,11 @@ WITHDRAW_MIN = 100          # Lev
 STARS_WITHDRAW_MIN = 1      # минимальное количество Stars для заявки
 
 WITHDRAW_NOTE = (
-    "Реквизиты для вывода указываются строго в одном из двух форматов:\n"
-    "1) СБП номер_телефона банк ФИО\n"
-    "2) КАРТА номер_карты банк ФИО\n\n"
-    "Пример написания реквизитов:\n"
-    "1) СБП +7-000-000-00-00 Сбербанк ИвановИванИванович\n"
-    "2) КАРТА 4276-8383-1286-7320 Сбербанк ИвановИванИванович"
+    "Вывод — только в криптовалюте. Доступные варианты реквизитов:\n"
+    "1) USDT · TRC20 (Tron) — адрес начинается с T\n"
+    "2) USDT / TON · сеть TON — адрес начинается с UQ или EQ\n"
+    "3) Аккаунт @CryptoBot — выплата прямо на твой Telegram\n\n"
+    "⚠️ Проверь адрес и сеть: перевод на неверный адрес вернуть нельзя."
 )
 
 
@@ -1021,8 +1073,8 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📜 <b>Правила Basketball Lev</b>\n\n"
         "‼️ <b>Очень важно</b>\n"
-        "Чтобы вывести выигранные звёзды и Lev, ОБЯЗАТЕЛЬНО укажи корректные реквизиты "
-        "(СБП/КАРТА) в разделе «✏️ Реквизиты» при первом входе в бот.\n"
+        "Чтобы покупать и выводить Lev, ОБЯЗАТЕЛЬНО укажи крипто-реквизиты "
+        "(USDT TRC20, сеть TON или @CryptoBot) в разделе «✏️ Реквизиты».\n"
         "Без сохранённых реквизитов бот не сможет вывести тебе ни звёзды, ни деньги, "
         "а также не допустит до игр с другими игроками и покупки Lev.\n\n"
         "🎯 <b>Как идёт игра</b>\n"
@@ -1108,8 +1160,8 @@ async def rules_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📜 <b>Правила Basketball Lev</b>\n\n"
         "‼️ <b>Очень важно</b>\n"
-        "Чтобы вывести выигранные звёзды и Lev, ОБЯЗАТЕЛЬНО укажи корректные реквизиты "
-        "(СБП/КАРТА) в разделе «✏️ Реквизиты» при первом входе в бот.\n"
+        "Чтобы покупать и выводить Lev, ОБЯЗАТЕЛЬНО укажи крипто-реквизиты "
+        "(USDT TRC20, сеть TON или @CryptoBot) в разделе «✏️ Реквизиты».\n"
         "Без сохранённых реквизитов бот не сможет вывести тебе ни звёзды, ни деньги, "
         "а также не допустит до игр с другими игроками и покупки Lev.\n\n"
         "🎯 <b>Как идёт игра</b>\n"
@@ -1191,7 +1243,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎯 Побеждай соперников в дуэлях\n"
             "💸 Зарабатывай Lev и Telegram Stars\n"
             "🏆 Участвуй в турнирах и командных соревнованиях\n"
-            "💎 Выводи выигрыш на карту или СБП\n\n"
+            "💎 Выводи выигрыш в криптовалюте (USDT / TON)\n\n"
             "👇 <b>Нажми кнопку «Старт» чтобы начать!</b>"
         )
 
@@ -1269,7 +1321,7 @@ async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
             (u.id,),
         ).fetchone()
         saved_req = row["saved_requisites"] if row else None
-        if not saved_req:
+        if not is_crypto_requisites(saved_req):
             return await update.message.reply_text(
                 "‼️ Перед выводом звёзд нужно указать реквизиты в разделе «✏️ Реквизиты».\n\n"
                 "Зайди в меню: «Покупка Lev / Вывод Lev» → «✏️ Реквизиты».",
@@ -1351,23 +1403,38 @@ async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=goals_menu("friend"),
         )
 
-    # ввод реквизитов
+    # ввод реквизитов (адрес кошелька)
     if context.user_data.get("await_requisites"):
-        if not valid_requisites(text):
+        req_type = context.user_data.get("await_requisites")
+        if req_type not in ("trc20", "ton"):
+            context.user_data.pop("await_requisites", None)
             return await update.message.reply_text(
-                "Реквизиты должны начинаться с 'СБП' или 'КАРТА'.\n" + WITHDRAW_NOTE,
-                parse_mode=ParseMode.HTML,
-                reply_markup=back_to_main_kb(),
+                "Выбери, куда выводить:",
+                reply_markup=requisites_type_kb(),
             )
+        addr = text.strip()
+        if not valid_crypto_address(req_type, addr):
+            hint = (
+                "Адрес USDT TRC20 начинается с T и состоит из 34 символов."
+                if req_type == "trc20"
+                else "Адрес в сети TON начинается с UQ или EQ и состоит из 48 символов."
+            )
+            return await update.message.reply_text(
+                f"❌ Похоже, адрес неверный. {hint}\nОтправь адрес ещё раз:",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("↩️ Назад", callback_data="requisites_menu")]]
+                ),
+            )
+        value = f"{REQ_TYPES[req_type][1]}: {addr}"
         conn = db()
         conn.execute(
-            "UPDATE players SET saved_requisites=? WHERE user_id=?", (text, u.id)
+            "UPDATE players SET saved_requisites=? WHERE user_id=?", (value, u.id)
         )
         conn.commit()
         conn.close()
         context.user_data.pop("await_requisites", None)
         return await update.message.reply_text(
-            "✅ Реквизиты сохранены.",
+            f"✅ Реквизиты сохранены:\n{value}",
             reply_markup=main_menu(u.id),
         )
 
@@ -1574,18 +1641,8 @@ async def shop_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_requisites(q.from_user.id):
         return await delete_and_send_new(
             q,
-            "‼️ Чтобы покупать Lev и потом выводить деньги, сначала укажи реквизиты для вывода "
-            "(СБП/КАРТА).\n\n"
-            "Без корректных реквизитов вывести средства будет невозможно.\n\n"
-            "Укажи реквизиты по формату:\n"
-            "1) СБП номер_телефона банк ФИО\n"
-            "2) КАРТА номер_карты банк ФИО",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("✏️ Ввести реквизиты", callback_data="requisites_menu")],
-                    [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
-                ]
-            ),
+            need_requisites_text("Перед покупкой Lev нужно указать реквизиты для вывода."),
+            reply_markup=requisites_type_kb(),
         )
 
     kb = [
@@ -1721,11 +1778,10 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     instruction = (
         "Спасибо за покупку! 🎉\n\n"
-        "Как вывести Lev обратно в деньги:\n"
-        "1) Сохраните корректные реквизиты (СБП/КАРТА) в «✏️ Реквизиты».\n"
-        "2) Создайте заявку командой: "
-        "<code>/withdraw &lt;Lev&gt; &lt;СБП/КАРТА и данные&gt;</code>.\n"
-        "3) При корректных реквизитах деньги придут в течение 5 часов.\n"
+        "Как вывести Lev:\n"
+        "1) Сохраните крипто-реквизиты в «✏️ Реквизиты».\n"
+        "2) Создайте заявку командой: <code>/withdraw &lt;Lev&gt;</code>.\n"
+        "3) Админ отправит криптовалюту на ваши реквизиты в порядке очереди.\n"
         "4) Статус заявки — в разделе «Покупка Lev / Вывод Lev» → «История вывода Lev»."
     )
 
@@ -1791,7 +1847,7 @@ async def stars_withdraw_btn(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ).fetchone()
     saved_req = row["saved_requisites"] if row else None
 
-    if not saved_req:
+    if not is_crypto_requisites(saved_req):
         text = (
             "‼️ Перед выводом звёзд нужно указать реквизиты в разделе «✏️ Реквизиты».\n\n"
             "Зайди в меню: «💰 Покупка Lev / Вывод Lev» → «✏️ Реквизиты»."
@@ -1861,10 +1917,9 @@ async def withdraw_how(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_and_send_new(
         q,
         "Создайте заявку командой:\n"
-        "<code>/withdraw &lt;Lev&gt; &lt;СБП/КАРТА и данные&gt;</code>\n"
-        "Примеры:\n"
-        "• <code>/withdraw 500 СБП +79990000000, Тинькофф, Иванов Иван</code>\n"
-        "• <code>/withdraw 1000 КАРТА 2200********0000, Сбербанк, Иванов Иван</code>",
+        "<code>/withdraw &lt;Lev&gt;</code>\n"
+        "Пример: <code>/withdraw 500</code>\n\n"
+        "Выплата придёт на сохранённые крипто-реквизиты.",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(
             [
@@ -1910,35 +1965,61 @@ async def requisites_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     push_menu(context, "requisites_menu")
 
-    row = db().execute(
-        "SELECT saved_requisites FROM players WHERE user_id=?",
-        (q.from_user.id,),
-    ).fetchone()
-    saved = row["saved_requisites"] if row else None
-
-    text = "✏️ Сохранённые реквизиты: " + (saved or "не заданы") + "\n\n" + WITHDRAW_NOTE
-
-    kb = [
-        [InlineKeyboardButton("Изменить", callback_data="requisites_edit")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
-    ]
-
-    markup = InlineKeyboardMarkup(kb)
-
-    await delete_and_send_new(q, text, reply_markup=markup, parse_mode=ParseMode.HTML)
+    saved = get_requisites(q.from_user.id)
+    text = (
+        "✏️ Сохранённые реквизиты: " + (f"<code>{saved}</code>" if saved else "не заданы")
+        + "\n\n" + WITHDRAW_NOTE + "\n\nВыбери, куда выводить:"
+    )
+    await delete_and_send_new(q, text, reply_markup=requisites_type_kb(), parse_mode=ParseMode.HTML)
 
 
 async def requisites_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Старая кнопка «Изменить» — ведёт в выбор сети."""
+    return await requisites_menu(update, context)
+
+
+async def req_type_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Игрок выбрал тип реквизитов: TRC20 / TON / @CryptoBot."""
     q = update.callback_query
     await q.answer()
-    context.user_data["await_requisites"] = True
+    req_type = q.data.split(":")[1]
+    if req_type not in REQ_TYPES:
+        return
+    u = q.from_user
+    ensure_player(u)
+    cancel_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("↩️ Назад", callback_data="requisites_menu")]]
+    )
+
+    if req_type == "cryptobot":
+        who = f"@{u.username}" if u.username else "без username"
+        value = f"CRYPTOBOT: tg_id {u.id} ({who})"
+        conn = db()
+        conn.execute("UPDATE players SET saved_requisites=? WHERE user_id=?", (value, u.id))
+        conn.commit()
+        conn.close()
+        context.user_data.pop("await_requisites", None)
+        return await delete_and_send_new(
+            q,
+            "✅ Реквизиты сохранены: выплаты придут на твой аккаунт в @CryptoBot.\n\n"
+            "⚠️ Обязательно открой @CryptoBot и нажми «Старт», иначе перевод не дойдёт.",
+            reply_markup=main_menu(u.id),
+        )
+
+    context.user_data["await_requisites"] = req_type
+    example = (
+        "Пример: <code>TXyz…</code> (34 символа, начинается с T)"
+        if req_type == "trc20"
+        else "Пример: <code>UQ…</code> или <code>EQ…</code> (48 символов)"
+    )
     await delete_and_send_new(
         q,
-        "Отправьте новые реквизиты одним сообщением.\n\n" + WITHDRAW_NOTE,
+        f"{REQ_TYPES[req_type][0]}\n\n"
+        "Отправь адрес кошелька одним сообщением.\n"
+        f"{example}\n\n"
+        "⚠️ Проверь сеть: перевод на неверный адрес вернуть нельзя.",
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("↩️ Отмена", callback_data="requisites_menu")]]
-        ),
+        reply_markup=cancel_kb,
     )
 
 
@@ -1949,9 +2030,9 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     u = update.effective_user
     ensure_player(u)
-    if len(context.args) < 2:
+    if len(context.args) < 1:
         return await update.message.reply_text(
-            "Использование: /withdraw &lt;Lev&gt; &lt;СБП/КАРТА и данные&gt;\n\n" + WITHDRAW_NOTE,
+            "Использование: /withdraw &lt;Lev&gt;\nПример: <code>/withdraw 500</code>\n\n" + WITHDRAW_NOTE,
             parse_mode=ParseMode.HTML,
             reply_markup=back_to_main_kb(),
         )
@@ -1967,12 +2048,11 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Минимальная сумма для вывода: {WITHDRAW_MIN} Lev.",
             reply_markup=back_to_main_kb(),
         )
-    details = " ".join(context.args[1:])[:200]
-    if not valid_requisites(details):
+    details = get_requisites(u.id)
+    if not details:
         return await update.message.reply_text(
-            "Реквизиты должны начинаться с 'СБП' или 'КАРТА'.\n\n" + WITHDRAW_NOTE,
-            parse_mode=ParseMode.HTML,
-            reply_markup=back_to_main_kb(),
+            need_requisites_text("Сначала укажи реквизиты для вывода."),
+            reply_markup=requisites_type_kb(),
         )
     if not sub_lev_safe(u.id, lev_amt):
         return await update.message.reply_text(
@@ -1991,7 +2071,8 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"Спасибо! Заявка #{wid} создана.\n"
-        "При корректных реквизитах деньги поступят в течение 5 часов.",
+        f"Выплата придёт на: {details}\n"
+        "Админ обрабатывает заявки в порядке очереди.",
         reply_markup=back_to_main_kb(),
     )
 
@@ -2612,18 +2693,8 @@ async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mode in ("mm", "friend") and not has_requisites(q.from_user.id):
         return await delete_and_send_new(
             q,
-            "‼️ Перед игрой с другими игроками нужно указать реквизиты для вывода (СБП/КАРТА).\n\n"
-            "Это нужно, чтобы бот мог отправить тебе выигрыш за звёзды или Lev.\n\n"
-            "Укажи реквизиты по формату:\n"
-            "1) СБП номер_телефона банк ФИО\n"
-            "2) КАРТА номер_карты банк ФИО",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("✏️ Ввести реквизиты", callback_data="requisites_menu")],
-                    [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
-                ]
-            ),
+            need_requisites_text("Перед игрой с другими игроками нужно указать реквизиты для вывода."),
+            reply_markup=requisites_type_kb(),
         )
 
     # Новый поток для дуэли с другом (Lev):
@@ -2654,22 +2725,11 @@ async def stars_menu_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- нет реквизитов ---
     if not has_requisites(q.from_user.id):
-        text = (
-            "‼️ Чтобы играть на реальные Telegram Stars, сначала укажи реквизиты для вывода "
-            "(СБП/КАРТА).\n\n"
-            "Иначе я не смогу отправить тебе выигрыш.\n\n"
-            "Зайди в раздел «✏️ Реквизиты» и укажи данные по формату:\n"
-            "1) СБП номер_телефона банк ФИО\n"
-            "2) КАРТА номер_карты банк ФИО"
+        return await delete_and_send_new(
+            q,
+            need_requisites_text("Перед игрой на звёзды нужно указать реквизиты для вывода."),
+            reply_markup=requisites_type_kb(),
         )
-
-        kb = [
-            [InlineKeyboardButton("✏️ Ввести реквизиты", callback_data="requisites_menu")],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
-        ]
-        markup = InlineKeyboardMarkup(kb)
-
-        return await delete_and_send_new(q, text, reply_markup=markup)
 
     # --- реквизиты есть ---
     text = (
@@ -4790,21 +4850,15 @@ async def start_game_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["menu_stack"] = ["menu"]
     
     # Если реквизитов нет — запрашиваем их
-    if not saved_req:
-        context.user_data["await_requisites"] = True
+    if not is_crypto_requisites(saved_req):
         await delete_and_send_new(
             q,
-            "‼️ <b>Перед началом игры укажи свои реквизиты</b>\n\n"
-            "Это нужно для вывода выигранных звёзд и Lev.\n\n"
-            "Отправь реквизиты ОДНИМ сообщением:\n\n"
-            "<b>Формат 1 (СБП):</b>\n"
-            "<code>СБП +7-000-000-00-00 Сбербанк ИвановИванИванович</code>\n\n"
-            "<b>Формат 2 (КАРТА):</b>\n"
-            "<code>КАРТА 4276-8383-1286-7320 Сбербанк ИвановИванИванович</code>\n\n"
-            "⚠️ Без реквизитов нельзя будет вывести средства и играть с другими игроками.",
+            "‼️ <b>Перед началом игры укажи реквизиты для вывода</b>\n\n"
+            "Выигрыш выводится в криптовалюте. Выбери, куда выводить:",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⏭ Пропустить (укажу позже)", callback_data="menu")]]
+                requisites_type_kb().inline_keyboard[:-1]
+                + ((InlineKeyboardButton("⏭ Пропустить (укажу позже)", callback_data="menu"),),)
             ),
         )
     else:
@@ -4880,6 +4934,7 @@ def build_app():
     app.add_handler(CallbackQueryHandler(withdraw_track, pattern=r"^withdraw_track:\d+$"))
     app.add_handler(CallbackQueryHandler(requisites_menu, pattern=r"^requisites_menu$"))
     app.add_handler(CallbackQueryHandler(requisites_edit, pattern=r"^requisites_edit$"))
+    app.add_handler(CallbackQueryHandler(req_type_btn, pattern=r"^req_type:"))
 
     # Админские команды по выводу Lev
     app.add_handler(CommandHandler("wlist", wlist))
@@ -4924,6 +4979,7 @@ def build_app():
     app.add_handler(CallbackQueryHandler(withdraw_track, pattern=r"^withdraw_track:\d+$"))
     app.add_handler(CallbackQueryHandler(requisites_menu, pattern=r"^requisites_menu$"))
     app.add_handler(CallbackQueryHandler(requisites_edit, pattern=r"^requisites_edit$"))
+    app.add_handler(CallbackQueryHandler(req_type_btn, pattern=r"^req_type:"))
 
     # Режимы и цель матча
     app.add_handler(CallbackQueryHandler(choose_mode, pattern=r"^mode:(mm|friend|train)$"))
