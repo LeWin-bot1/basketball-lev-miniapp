@@ -17,3 +17,7 @@ services:
         sync: false
       - key: MINIAPP_URL
         sync: false
+      - key: CRYPTO_PAY_TOKEN
+        sync: false
+      - key: CRYPTO_PAY_NETWORK
+        value: testnet

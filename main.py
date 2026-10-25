@@ -893,6 +893,10 @@ async def lev_purchases_history_btn(update: Update, context: ContextTypes.DEFAUL
         if r["currency"] == "RUB":
             price = r["amount"] / 100.0
             price_str = f"{price:.2f} ₽"
+        elif r["currency"] == "XTR":
+            price_str = f"{r['amount']} ⭐"
+        elif r["currency"] in ("USDT", "TON"):
+            price_str = f"{r['amount'] / 100.0:g} {r['currency']}"
         else:
             price_str = f"{r['amount']} {r['currency']}"
 
@@ -1607,7 +1611,7 @@ async def money_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     kb_rows = [
-        [InlineKeyboardButton("💸 Купить Lev", callback_data="shop")],
+        [InlineKeyboardButton("💸 Пополнить Lev", callback_data="shop")],
         [InlineKeyboardButton("🏦 Вывод Lev", callback_data="withdraw_menu")],
         [InlineKeyboardButton("🧾 История покупок Lev", callback_data="lev_purchases_history")],
         [InlineKeyboardButton("📜 История вывода Lev", callback_data="lev_withdraw_history")],
@@ -1633,8 +1637,94 @@ async def friend_stars_soon(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# -------------------- SHOP: ПОКУПКА LEV --------------------
+# -------------------- ПОПОЛНЕНИЕ LEV: ЗВЁЗДЫ + КРИПТА --------------------
+# Курсы хранятся в таблице config и меняются админом: /setrate star 10
+# ⚠️ Значения по умолчанию — ТЕСТОВЫЕ.
+DEFAULT_RATES = {"star": 10.0, "usdt": 100.0, "ton": 300.0}   # сколько Lev за 1 ⭐ / 1 USDT / 1 TON
+RATE_LABELS = {"star": "1 ⭐", "usdt": "1 USDT", "ton": "1 TON"}
+STAR_TOPUP_OPTIONS = [1, 5, 25, 100]
+CRYPTO_TOPUP_OPTIONS = {
+    "USDT": ["0.1", "1", "5", "10"],
+    "TON": ["0.1", "0.5", "1", "5"],
+}
+
+CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN", "").strip()
+# testnet (по умолчанию, через @CryptoTestnetBot) или mainnet (@CryptoBot)
+CRYPTO_PAY_NETWORK = os.getenv("CRYPTO_PAY_NETWORK", "testnet").strip().lower()
+CRYPTO_PAY_API = (
+    "https://pay.crypt.bot/api"
+    if CRYPTO_PAY_NETWORK == "mainnet"
+    else "https://testnet-pay.crypt.bot/api"
+)
+CRYPTO_INVOICE_TTL = 3600  # счёт живёт 1 час
+
+
+def get_rate(kind: str) -> float:
+    try:
+        return float(get_config(f"rate_{kind}", str(DEFAULT_RATES[kind])))
+    except (TypeError, ValueError):
+        return DEFAULT_RATES[kind]
+
+
+def lev_for(kind: str, amount: float) -> int:
+    return int(amount * get_rate(kind) + 1e-9)
+
+
+def rates_text() -> str:
+    return "\n".join(
+        f"• {RATE_LABELS[k]} = {get_rate(k):g} Lev" for k in ("star", "usdt", "ton")
+    )
+
+
+def ensure_crypto_tables() -> None:
+    conn = db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS crypto_invoices (
+          invoice_id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          asset TEXT NOT NULL,
+          amount TEXT NOT NULL,
+          lev INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          pay_url TEXT,
+          created_at INTEGER DEFAULT (strftime('%s','now')),
+          paid_at INTEGER
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+async def crypto_pay_call(method: str, params: dict) -> dict:
+    """Вызов Crypto Pay API. Возвращает result или бросает RuntimeError."""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(
+            f"{CRYPTO_PAY_API}/{method}",
+            headers={"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN},
+            json=params,
+        )
+    data = r.json()
+    if not data.get("ok"):
+        raise RuntimeError(f"Crypto Pay {method} error: {data.get('error')}")
+    return data["result"]
+
+
+def topup_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("⭐ Пополнить звёздами", callback_data="topup_stars")],
+            [InlineKeyboardButton("🪙 Пополнить криптой (USDT / TON)", callback_data="topup_crypto")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
+        ]
+    )
+
+
 async def shop_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню пополнения Lev (раньше — пакеты за рубли)."""
     q = update.callback_query
     await q.answer()
 
@@ -1645,37 +1735,296 @@ async def shop_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=requisites_type_kb(),
         )
 
-    kb = [
-        [
-            InlineKeyboardButton(f"{lbl} — {price}₽", callback_data=f"buy:{pid}")
-        ]
-        for pid, (lbl, lev_amt, price) in PACKS.items()
-    ]
-    kb.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu")])
     await delete_and_send_new(
-        q, "🛍 Выберите пакет Lev:", reply_markup=InlineKeyboardMarkup(kb)
+        q,
+        f"💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n"
+        "Пополнение Lev — Lev начисляются автоматически сразу после оплаты.\n\n"
+        f"Курс:\n{rates_text()}",
+        reply_markup=topup_menu_kb(),
     )
+
+
+async def topup_stars_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    kb = [
+        [InlineKeyboardButton(f"{n} ⭐ → {lev_for('star', n)} Lev", callback_data=f"topup_star:{n}")]
+        for n in STAR_TOPUP_OPTIONS
+    ]
+    kb.append([InlineKeyboardButton("↩️ Назад", callback_data="shop")])
+    await delete_and_send_new(
+        q, "⭐ Сколько звёзд потратить на пополнение?", reply_markup=InlineKeyboardMarkup(kb)
+    )
+
+
+async def topup_star_amount_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    stars = int(q.data.split(":")[1])
+    if stars <= 0:
+        return
+    lev = lev_for("star", stars)
+    payload = f"lev_stars:{q.from_user.id}:{stars}:{lev}:{secrets.token_hex(3)}"
+    await context.bot.send_invoice(
+        chat_id=q.message.chat.id,
+        title=f"Пополнение {lev} Lev",
+        description=f"{stars} ⭐ → {lev} Lev",
+        payload=payload,
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label=f"{lev} Lev", amount=stars)],
+    )
+
+
+async def topup_crypto_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not CRYPTO_PAY_TOKEN:
+        return await delete_and_send_new(
+            q,
+            "🪙 Пополнение криптой пока не подключено. Попробуй звёздами.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("↩️ Назад", callback_data="shop")]]
+            ),
+        )
+    kb = [
+        [InlineKeyboardButton("💵 USDT", callback_data="topup_asset:USDT"),
+         InlineKeyboardButton("💎 TON", callback_data="topup_asset:TON")],
+        [InlineKeyboardButton("↩️ Назад", callback_data="shop")],
+    ]
+    await delete_and_send_new(q, "🪙 Выбери монету:", reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def topup_asset_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    asset = q.data.split(":")[1]
+    if asset not in CRYPTO_TOPUP_OPTIONS:
+        return
+    kind = asset.lower()
+    kb = [
+        [InlineKeyboardButton(
+            f"{amt} {asset} → {lev_for(kind, float(amt))} Lev",
+            callback_data=f"topup_c:{asset}:{amt}",
+        )]
+        for amt in CRYPTO_TOPUP_OPTIONS[asset]
+    ]
+    kb.append([InlineKeyboardButton("↩️ Назад", callback_data="topup_crypto")])
+    await delete_and_send_new(
+        q, f"Сколько {asset} внести?", reply_markup=InlineKeyboardMarkup(kb)
+    )
+
+
+async def topup_crypto_amount_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    _, asset, amt = q.data.split(":")
+    if asset not in CRYPTO_TOPUP_OPTIONS or amt not in CRYPTO_TOPUP_OPTIONS[asset]:
+        return
+    uid = q.from_user.id
+    lev = lev_for(asset.lower(), float(amt))
+    ensure_crypto_tables()
+    try:
+        inv = await crypto_pay_call(
+            "createInvoice",
+            {
+                "asset": asset,
+                "amount": amt,
+                "description": f"Пополнение {lev} Lev в Basketball Lev",
+                "payload": f"lev:{uid}:{lev}",
+                "expires_in": CRYPTO_INVOICE_TTL,
+                "allow_comments": False,
+            },
+        )
+    except Exception as e:
+        logging.error("createInvoice failed: %s", e)
+        return await delete_and_send_new(
+            q,
+            "Не удалось создать счёт. Попробуй ещё раз чуть позже.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("↩️ Назад", callback_data="topup_crypto")]]
+            ),
+        )
+
+    inv_id = int(inv["invoice_id"])
+    pay_url = inv.get("bot_invoice_url") or inv.get("pay_url")
+    conn = db()
+    conn.execute(
+        "INSERT INTO crypto_invoices(invoice_id,user_id,asset,amount,lev,status,pay_url) "
+        "VALUES(?,?,?,?,?,'active',?)",
+        (inv_id, uid, asset, amt, lev, pay_url),
+    )
+    conn.commit()
+    conn.close()
+    ensure_crypto_watcher(context.application)
+
+    await delete_and_send_new(
+        q,
+        f"🧾 Счёт #{inv_id}: {amt} {asset} → {lev} Lev\n\n"
+        "Нажми «Оплатить» — откроется CryptoBot. После оплаты Lev начислятся "
+        "автоматически в течение ~15 секунд.\n"
+        "Счёт действует 1 час.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("💳 Оплатить", url=pay_url)],
+                [InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"cinv_check:{inv_id}")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
+            ]
+        ),
+    )
+
+
+async def credit_crypto_invoice(bot, inv_id: int) -> bool:
+    """Начислить Lev по оплаченному счёту. Защищено от двойного начисления."""
+    conn = db()
+    cur = conn.execute(
+        "UPDATE crypto_invoices SET status='paid', paid_at=strftime('%s','now') "
+        "WHERE invoice_id=? AND status='active'",
+        (inv_id,),
+    )
+    if cur.rowcount != 1:
+        conn.close()
+        return False
+    row = conn.execute(
+        "SELECT user_id, asset, amount, lev FROM crypto_invoices WHERE invoice_id=?",
+        (inv_id,),
+    ).fetchone()
+    conn.execute(
+        "UPDATE players SET lev=COALESCE(lev,0)+? WHERE user_id=?",
+        (row["lev"], row["user_id"]),
+    )
+    conn.execute(
+        "INSERT INTO purchases(user_id,pack,lev,amount,currency,payload,status,paid_at) "
+        "VALUES(?,?,?,?,?,?,'paid',strftime('%s','now'))",
+        (
+            row["user_id"], "crypto", row["lev"],
+            int(round(float(row["amount"]) * 100)), row["asset"], f"cryptopay:{inv_id}",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    try:
+        await bot.send_message(
+            row["user_id"],
+            f"✅ Пополнение зачислено: +{row['lev']} Lev ({row['amount']} {row['asset']}).\n"
+            f"Баланс: {get_lev(row['user_id'])} Lev.",
+            reply_markup=back_to_main_kb(),
+        )
+    except Exception:
+        pass
+    return True
+
+
+async def check_crypto_invoices(bot, invoice_ids: List[int]) -> None:
+    """Спросить у Crypto Pay статусы счетов и начислить оплаченные."""
+    if not invoice_ids or not CRYPTO_PAY_TOKEN:
+        return
+    res = await crypto_pay_call(
+        "getInvoices", {"invoice_ids": ",".join(str(i) for i in invoice_ids)}
+    )
+    items = res.get("items", []) if isinstance(res, dict) else res
+    for inv in items:
+        st = inv.get("status")
+        iid = int(inv["invoice_id"])
+        if st == "paid":
+            await credit_crypto_invoice(bot, iid)
+        elif st == "expired":
+            conn = db()
+            conn.execute(
+                "UPDATE crypto_invoices SET status='expired' WHERE invoice_id=? AND status='active'",
+                (iid,),
+            )
+            conn.commit()
+            conn.close()
+
+
+_crypto_watcher_task: Optional[asyncio.Task] = None
+
+
+async def crypto_watcher_loop(application) -> None:
+    """Фоновая проверка неоплаченных счетов (каждые 10 сек, пока есть активные)."""
+    while True:
+        try:
+            ensure_crypto_tables()
+            conn = db()
+            rows = conn.execute(
+                "SELECT invoice_id FROM crypto_invoices WHERE status='active' "
+                "AND created_at > strftime('%s','now') - ?",
+                (CRYPTO_INVOICE_TTL + 600,),
+            ).fetchall()
+            conn.close()
+            if not rows:
+                return  # нечего проверять — выходим, запустимся при новом счёте
+            await check_crypto_invoices(application.bot, [r["invoice_id"] for r in rows])
+        except Exception as e:
+            logging.warning("crypto watcher error: %s", e)
+        await asyncio.sleep(10)
+
+
+def ensure_crypto_watcher(application) -> None:
+    global _crypto_watcher_task
+    if not CRYPTO_PAY_TOKEN:
+        return
+    if _crypto_watcher_task is None or _crypto_watcher_task.done():
+        _crypto_watcher_task = asyncio.create_task(crypto_watcher_loop(application))
+
+
+async def cinv_check_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    inv_id = int(q.data.split(":")[1])
+    conn = db()
+    row = conn.execute(
+        "SELECT status FROM crypto_invoices WHERE invoice_id=? AND user_id=?",
+        (inv_id, q.from_user.id),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return await q.answer("Счёт не найден.", show_alert=True)
+    if row["status"] == "active":
+        try:
+            await check_crypto_invoices(context.bot, [inv_id])
+        except Exception as e:
+            logging.warning("check invoice failed: %s", e)
+        ensure_crypto_watcher(context.application)
+        conn = db()
+        row = conn.execute(
+            "SELECT status FROM crypto_invoices WHERE invoice_id=?", (inv_id,)
+        ).fetchone()
+        conn.close()
+    msg = {
+        "paid": "✅ Оплата получена, Lev начислены!",
+        "active": "⏳ Оплата пока не поступила. Если уже оплатил — подожди немного.",
+        "expired": "⌛ Срок счёта истёк. Создай новый.",
+    }.get(row["status"], row["status"])
+    await q.answer(msg, show_alert=True)
 
 
 async def buy_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Старые кнопки покупки за рубли — больше не работают."""
     q = update.callback_query
-    await q.answer()
-    pid = q.data.split(":")[1]
-    if pid not in PACKS:
-        return await q.answer("Пакет не найден", show_alert=True)
-    label, lev_amt, price_rub = PACKS[pid]
-    payload = f"rub_{pid}_{q.from_user.id}_{int(time.time())}_{secrets.token_hex(3)}"
-    prices = [LabeledPrice(label=label, amount=price_rub * 100)]
-    await context.bot.send_invoice(
-        chat_id=q.message.chat.id,
-        title=label,
-        description=f"Покупка {lev_amt} Lev за {price_rub}₽",
-        payload=payload,
-        provider_token=PROVIDER_TOKEN,
-        currency="RUB",
-        prices=prices,
-        start_parameter="lev_shop",
-    )
+    await q.answer("Покупка за рубли отключена. Пополняй звёздами или криптой.", show_alert=True)
+
+
+async def cmd_setrate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/setrate <star|usdt|ton> <Lev за 1 единицу> — только админ."""
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) != 2 or context.args[0] not in DEFAULT_RATES:
+        return await update.message.reply_text(
+            "Использование: /setrate <star|usdt|ton> <Lev за 1>\nПример: /setrate usdt 100\n\n"
+            f"Текущий курс:\n{rates_text()}"
+        )
+    try:
+        val = float(context.args[1].replace(",", "."))
+        assert val > 0
+    except Exception:
+        return await update.message.reply_text("Курс должен быть положительным числом.")
+    set_config(f"rate_{context.args[0]}", str(val))
+    await update.message.reply_text(f"✅ Курс обновлён.\n{rates_text()}")
+
+
+async def cmd_rates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"💱 Курс Lev:\n{rates_text()}")
 
 
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1741,7 +2090,40 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         return
 
-    # ---------- 2) Покупка Lev за RUB ----------
+    # ---------- 2) Пополнение Lev звёздами ----------
+    if sp.currency == "XTR" and payload.startswith("lev_stars:"):
+        try:
+            _, _uid, stars_s, lev_s, _tok = payload.split(":")
+            stars, lev_amt = int(stars_s), int(lev_s)
+        except Exception:
+            logging.error("Bad lev_stars payload: %s", payload)
+            return await update.message.reply_text(
+                "Оплата получена, но не удалось её распознать. Напишите /support.",
+                reply_markup=back_to_main_kb(),
+            )
+        conn = db()
+        try:
+            conn.execute(
+                "INSERT INTO purchases(user_id,pack,lev,amount,currency,payload,telegram_charge_id,status,paid_at) "
+                "VALUES(?,?,?,?,?,?,?,'paid',strftime('%s','now'))",
+                (u.id, "stars", lev_amt, sp.total_amount, "XTR", payload,
+                 sp.telegram_payment_charge_id),
+            )
+        except sqlite3.IntegrityError:
+            conn.close()
+            return  # этот платёж уже обработан
+        conn.execute(
+            "UPDATE players SET lev=COALESCE(lev,0)+? WHERE user_id=?", (lev_amt, u.id)
+        )
+        conn.commit()
+        conn.close()
+        return await update.message.reply_text(
+            f"✅ Пополнение зачислено: +{lev_amt} Lev ({stars} ⭐).\n"
+            f"Баланс: {get_lev(u.id)} Lev.",
+            reply_markup=back_to_main_kb(),
+        )
+
+    # ---------- 3) Покупка Lev за RUB (отключено, оставлено для старых счетов) ----------
     try:
         _, pid, *_ = payload.split("_")
     except Exception:
@@ -4895,6 +5277,8 @@ async def post_init(application) -> None:
     Вызывается после инициализации бота.
     Устанавливает Menu Button для Mini App.
     """
+    ensure_crypto_tables()
+    ensure_crypto_watcher(application)
     if MINIAPP_URL:
         try:
             await application.bot.set_chat_menu_button(
@@ -4966,6 +5350,14 @@ def build_app():
     # Магазин Lev
     app.add_handler(CallbackQueryHandler(shop_btn, pattern=r"^shop$"))
     app.add_handler(CallbackQueryHandler(buy_btn, pattern=r"^buy:.+"))
+    app.add_handler(CallbackQueryHandler(topup_stars_btn, pattern=r"^topup_stars$"))
+    app.add_handler(CallbackQueryHandler(topup_star_amount_btn, pattern=r"^topup_star:\d+$"))
+    app.add_handler(CallbackQueryHandler(topup_crypto_btn, pattern=r"^topup_crypto$"))
+    app.add_handler(CallbackQueryHandler(topup_asset_btn, pattern=r"^topup_asset:"))
+    app.add_handler(CallbackQueryHandler(topup_crypto_amount_btn, pattern=r"^topup_c:"))
+    app.add_handler(CallbackQueryHandler(cinv_check_btn, pattern=r"^cinv_check:\d+$"))
+    app.add_handler(CommandHandler("setrate", cmd_setrate))
+    app.add_handler(CommandHandler("rates", cmd_rates))
     app.add_handler(CallbackQueryHandler(balance_btn, pattern=r"^balance$"))
 
     # Звёздный матчмейкинг
