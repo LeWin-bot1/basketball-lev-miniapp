@@ -10,3 +10,6 @@ miniapp/frontend/dist/.git
 lews/
 *.mov
 *.mp4
+*.env
+*.db
+*.sqlite
