@@ -994,37 +994,39 @@ async def profile_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ensure_player(q.from_user)
         row = get_player(q.from_user.id)
 
+    uid = q.from_user.id
     wins = row["wins"] or 0
     losses = row["losses"] or 0
-    try:
-        draws = row["draws"] if row["draws"] is not None else 0
-    except (KeyError, TypeError):
-        draws = 0
-    stars = get_stars_pending(q.from_user.id)
 
-    last = "—"
-    if row["last_match_json"]:
-        try:
-            lm = json.loads(row["last_match_json"])
-            delta = lm.get("delta_lev", 0)
-            delta_str = f"+{delta}" if delta > 0 else (f"{delta}" if delta < 0 else "0")
-            last = (
-                f"{lm.get('mode_human','Матч')} | "
-                f"Попадания: {lm.get('you_score')}-{lm.get('opp_score')} | "
-                f"Соперник: {lm.get('opponent_nick','—')} | "
-                f"Итог по Lev: {delta_str}"
-            )
-        except Exception:
-            pass
+    # статистика Lev по истории матчей
+    conn = db()
+    try:
+        st = conn.execute(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN delta_lev > 0 THEN delta_lev END), 0) AS won, "
+            "COALESCE(SUM(CASE WHEN delta_lev < 0 THEN -delta_lev END), 0) AS lost, "
+            "COALESCE(MAX(delta_lev), 0) AS best "
+            "FROM match_history WHERE user_id=?",
+            (uid,),
+        ).fetchone()
+        won, lost, best = int(st["won"]), int(st["lost"]), int(st["best"])
+    except sqlite3.OperationalError:
+        won = lost = best = 0
+    finally:
+        conn.close()
+    net = won - lost
+    net_str = f"+{net}" if net > 0 else str(net)
 
     text = (
-        f"👤 Профиль: {display_name(q.from_user.id)}\n"
-        f"Победы: {wins}\n"
-        f"Поражения: {losses}\n"
-        f"Ничьи: {draws}\n"
-        f"Матчей сыграно: {row['matches_played'] or 0}\n"
-        f"Последний матч: {last}\n\n"
-        f"⭐ Выигранные звёзды (долг бота): {stars}\n"
+        f"👤 Профиль: {display_name(uid)}\n\n"
+        f"💰 Баланс: {get_lev(uid)} Lev\n\n"
+        f"🏀 Матчей сыграно: {row['matches_played'] or 0}\n"
+        f"✅ Победы: {wins}\n"
+        f"❌ Поражения: {losses}\n\n"
+        f"🦁 Выиграно Lev: {won}\n"
+        f"💸 Проиграно Lev: {lost}\n"
+        f"📈 Итог по Lev: {net_str}\n"
+        f"🔥 Самый крупный выигрыш: {best} Lev\n"
     )
 
     kb = []
