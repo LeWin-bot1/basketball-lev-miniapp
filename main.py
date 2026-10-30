@@ -809,9 +809,6 @@ def maybe_send_timeout_reminder(uid: int, context: ContextTypes.DEFAULT_TYPE):
 
 # -------------------- MAIN MENU / UI --------------------
 def main_menu(uid: int) -> InlineKeyboardMarkup:
-    # Проверяем, есть ли у игрока команда
-    team = get_user_team(uid)
-    
     kb = [
         [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
         [InlineKeyboardButton("▶️ Играть", callback_data="play_menu")],
@@ -822,14 +819,11 @@ def main_menu(uid: int) -> InlineKeyboardMarkup:
         ],
     ]
     
-    # Добавляем кнопку команды в зависимости от того, есть ли у игрока команда
-    if team:
-        kb.append([InlineKeyboardButton("👥 Моя команда", callback_data="my_team_menu")])
-    else:
-        kb.append([InlineKeyboardButton("👥 Создать команду", callback_data="create_team_start")])
-    
     kb.extend([
-        [InlineKeyboardButton("💰 Покупка Lev / Вывод Lev", callback_data="money_menu")],
+        [
+            InlineKeyboardButton("💸 Пополнить", callback_data="shop"),
+            InlineKeyboardButton("🏦 Вывести", callback_data="withdraw_menu"),
+        ],
     ])
     # старые выигранные звёзды (долг бота) — кнопка видна, только пока есть что выводить
     if get_stars_pending(uid) > 0:
@@ -1625,10 +1619,10 @@ async def money_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     kb_rows = [
-        [InlineKeyboardButton("💸 Пополнить Lev", callback_data="shop")],
-        [InlineKeyboardButton("🏦 Вывод Lev", callback_data="withdraw_menu")],
-        [InlineKeyboardButton("🧾 История покупок Lev", callback_data="lev_purchases_history")],
-        [InlineKeyboardButton("📜 История вывода Lev", callback_data="lev_withdraw_history")],
+        [InlineKeyboardButton("💸 Пополнить", callback_data="shop"),
+         InlineKeyboardButton("🏦 Вывести", callback_data="withdraw_menu")],
+        [history_btn("deposits")],
+        [history_btn("withdrawals")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
     ]
     markup = InlineKeyboardMarkup(kb_rows)
@@ -1728,11 +1722,25 @@ async def crypto_pay_call(method: str, params: dict) -> dict:
     return data["result"]
 
 
+def history_btn(kind: str) -> InlineKeyboardButton:
+    """
+    Кнопка истории: открывает вкладку Mini App (пополнения / выводы со статусами).
+    Если Mini App не настроен — показывает историю прямо в боте.
+    kind: "deposits" | "withdrawals"
+    """
+    label = "🧾 История пополнений" if kind == "deposits" else "📜 История выводов"
+    if MINIAPP_URL:
+        return InlineKeyboardButton(label, web_app=WebAppInfo(url=f"{MINIAPP_URL}/history?tab={kind}"))
+    cb = "lev_purchases_history" if kind == "deposits" else "lev_withdraw_history"
+    return InlineKeyboardButton(label, callback_data=cb)
+
+
 def topup_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("⭐ Пополнить звёздами", callback_data="topup_stars")],
             [InlineKeyboardButton("🪙 Пополнить криптой (USDT / TON)", callback_data="topup_crypto")],
+            [history_btn("deposits")],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
         ]
     )
@@ -2215,12 +2223,13 @@ async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchone()
     saved = row["saved_requisites"] if row else None
 
-    text = "🏦 Вывод Lev.\n" + WITHDRAW_NOTE
+    text = f"🏦 Вывод Lev\n💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n" + WITHDRAW_NOTE
     if saved:
         text += f"\n\nСохранённые реквизиты: {saved}"
 
     kb = [
-        [InlineKeyboardButton("Создать заявку (команда)", callback_data="withdraw_how")],
+        [InlineKeyboardButton("💸 Создать заявку на вывод", callback_data="withdraw_how")],
+        [history_btn("withdrawals")],
         [InlineKeyboardButton("✏️ Изменить реквизиты", callback_data="requisites_menu")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
     ]

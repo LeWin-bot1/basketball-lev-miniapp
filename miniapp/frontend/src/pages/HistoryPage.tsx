@@ -103,7 +103,13 @@ function getTxTypeLabel(txType: string): string {
 }
 
 export default function HistoryPage() {
-  const [tab, setTab] = useState<HistoryTab>('matches');
+  // ?tab=deposits | withdrawals | finance (из кнопок бота) — сразу открываем «Финансы»
+  const initialTab: HistoryTab = ['deposits', 'withdrawals', 'finance'].includes(
+    new URLSearchParams(window.location.search).get('tab') || ''
+  )
+    ? 'finance'
+    : 'matches';
+  const [tab, setTab] = useState<HistoryTab>(initialTab);
   const [balance, setBalance] = useState<BalanceSummary | null>(null);
   const [history, setHistory] = useState<FinanceHistory | null>(null);
   const [matches, setMatches] = useState<MatchResult[]>([]);
