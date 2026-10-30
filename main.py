@@ -112,6 +112,20 @@ async def send_photo_best_effort(
         )
 
 
+# неоплаченные счета на пополнение: chat_id -> message_id
+# (убираем их, как только игрок уходит в другое меню или жмёт «Отмена»)
+pending_invoices: Dict[int, int] = {}
+
+
+async def drop_pending_invoice(bot, chat_id: int) -> None:
+    mid = pending_invoices.pop(chat_id, None)
+    if mid:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
 async def delete_and_send_new(
     query,
     text: str,
@@ -121,7 +135,12 @@ async def delete_and_send_new(
     """
     Удаляет старое сообщение и отправляет новое.
     Используется для красивой навигации по меню.
+    Заодно убирает неоплаченный счёт, если он висит в чате.
     """
+    try:
+        await drop_pending_invoice(query.message.get_bot(), query.message.chat_id)
+    except Exception:
+        pass
     try:
         # Удаляем старое сообщение
         await query.message.delete()
@@ -1776,15 +1795,39 @@ async def topup_star_amount_btn(update: Update, context: ContextTypes.DEFAULT_TY
         return
     lev = lev_for("star", stars)
     payload = f"lev_stars:{q.from_user.id}:{stars}:{lev}:{secrets.token_hex(3)}"
-    await context.bot.send_invoice(
-        chat_id=q.message.chat.id,
+    chat_id = q.message.chat.id
+
+    # убираем меню выбора суммы и прошлый неоплаченный счёт
+    await drop_pending_invoice(context.bot, chat_id)
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+
+    msg = await context.bot.send_invoice(
+        chat_id=chat_id,
         title=f"Пополнение {lev} Lev",
         description=f"{stars} ⭐ → {lev} Lev",
         payload=payload,
         provider_token="",
         currency="XTR",
         prices=[LabeledPrice(label=f"{lev} Lev", amount=stars)],
+        # первая кнопка обязательно «Оплатить», вторая — отмена
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton(f"Заплатить ⭐{stars}", pay=True)],
+                [InlineKeyboardButton("❌ Отмена", callback_data="invoice_cancel")],
+            ]
+        ),
     )
+    pending_invoices[chat_id] = msg.message_id
+
+
+async def invoice_cancel_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """«Отмена» под счётом: счёт удаляется, возвращаемся в меню пополнения."""
+    q = update.callback_query
+    pending_invoices.pop(q.message.chat_id, None)
+    return await shop_btn(update, context)  # delete_and_send_new удалит сам счёт
 
 
 async def topup_crypto_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2052,6 +2095,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ensure_player(u)
     sp = update.message.successful_payment
     payload = sp.invoice_payload
+    pending_invoices.pop(update.message.chat_id, None)  # счёт оплачен — не удаляем его
 
     # ---------- 1) Оплата участия в матче на реальные Telegram Stars ----------
     if sp.currency == "XTR" and payload.startswith("stars_match_start:"):
@@ -5459,6 +5503,7 @@ def build_app():
     app.add_handler(CallbackQueryHandler(shop_btn, pattern=r"^shop$"))
     app.add_handler(CallbackQueryHandler(buy_btn, pattern=r"^buy:.+"))
     app.add_handler(CallbackQueryHandler(topup_stars_btn, pattern=r"^topup_stars$"))
+    app.add_handler(CallbackQueryHandler(invoice_cancel_btn, pattern=r"^invoice_cancel$"))
     app.add_handler(CallbackQueryHandler(topup_star_amount_btn, pattern=r"^topup_star:\d+$"))
     app.add_handler(CallbackQueryHandler(topup_crypto_btn, pattern=r"^topup_crypto$"))
     app.add_handler(CallbackQueryHandler(topup_asset_btn, pattern=r"^topup_asset:"))
