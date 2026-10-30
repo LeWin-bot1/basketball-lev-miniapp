@@ -833,19 +833,7 @@ def main_menu(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🛟 Поддержка", callback_data="support_btn")],
     ])
     
-    # Добавляем кнопки Mini App, если URL настроен
-    if MINIAPP_URL:
-        kb.append([
-            InlineKeyboardButton(
-                "📊 Статистика",
-                web_app=WebAppInfo(url=f"{MINIAPP_URL}/profile")
-            ),
-            InlineKeyboardButton(
-                "🏅 Рейтинг",
-                web_app=WebAppInfo(url=f"{MINIAPP_URL}/leaderboard")
-            ),
-        ])
-    
+    # «Статистика» — внутри профиля, рейтинг = турнир (отдельных кнопок нет)
     return InlineKeyboardMarkup(kb)
 
 async def stars_money_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
