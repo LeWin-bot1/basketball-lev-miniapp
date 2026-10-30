@@ -819,7 +819,11 @@ def main_menu(uid: int) -> InlineKeyboardMarkup:
     
     kb.extend([
         [InlineKeyboardButton("💰 Покупка Lev / Вывод Lev", callback_data="money_menu")],
-        [InlineKeyboardButton("⭐ Вывод Stars", callback_data="stars_money_menu")],
+    ])
+    # старые выигранные звёзды (долг бота) — кнопка видна, только пока есть что выводить
+    if get_stars_pending(uid) > 0:
+        kb.append([InlineKeyboardButton("⭐ Вывод Stars", callback_data="stars_money_menu")])
+    kb.extend([
         [InlineKeyboardButton("📜 Правила", callback_data="rules_btn")],
         [InlineKeyboardButton("🛟 Поддержка", callback_data="support_btn")],
     ])
@@ -1094,14 +1098,9 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• После каждых двух сыгранных матчей бот напоминает об этом правиле перед началом новой игры.\n\n"
         "🤝 <b>Режимы</b>\n"
         "• Матчмейкинг: случайный соперник за фиксированную ставку Lev.\n"
-        "• Дуэль с другом: создаёшь ссылку и выбираешь ставку Lev.\n"
-        "• Тренировка: игра против бота, без изменения Lev и рейтинга.\n"
-        "• Дуэль на звёзды: бот создаёт банк звёзд; победитель забирает весь банк.\n\n"
-        "⭐ <b>Дуэли на звёзды</b>\n"
-        "• Доступные ставки: 1, 25 и 50 звёзд с игрока.\n"
-        "• Игра идёт на попадание, как и обычные матчи.\n"
-        "• После победы звёзды начисляются на баланс «долг бота» (в профиле), "
-        "а затем ты можешь подать заявку на их вывод.\n\n"
+        "• Игра с другом: создаёшь ссылку и выбираешь ставку Lev.\n"
+        "• Ставка списывается у обоих игроков только в момент старта матча. "
+        "Победитель забирает весь банк.\n\n"
         "👥 <b>Команды</b>\n"
         "• Команда — до 3 игроков.\n"
         "• Название команды: только латиница, цифры и подчёркивание, 3–40 символов.\n\n"
@@ -1119,7 +1118,7 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "ℹ️ Кратко:\n"
-        "• Выбирай режим: матчмейкинг, дуэль с другом, тренировка или дуэль на звёзды.\n"
+        "• Выбирай режим: матчмейкинг или игра с другом. Игра идёт на Lev.\n"
         "• Бросай баскетбольный мяч в корзинку с помощью стикера 🏀.\n"
         "• Игра на попадание: попал — у соперника один шанс ответить. Не ответил — ты победил.\n"
         "• На ход 1.5 минуты, иначе — поражение по времени.\n\n"
@@ -1179,7 +1178,7 @@ async def rules_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• На каждый ход даётся <b>1.5 минуты</b>.\n"
         "• Если игрок не успевает сделать бросок — он получает <b>техническое поражение по времени</b>.\n\n"
         "🤝 <b>Режимы</b>\n"
-        "• Матчмейкинг, дуэль с другом, тренировка и дуэль на звёзды."
+        "• Матчмейкинг и игра с другом — на Lev. Ставка списывается, когда матч начинается."
     )
 
     await delete_and_send_new(
@@ -1557,11 +1556,8 @@ async def play_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     push_menu(context, "play_menu")
 
     kb = [
-        [InlineKeyboardButton("🎯 Матчмейкинг на Lev", callback_data="mode:mm")],
-        [InlineKeyboardButton("⭐ Матчмейкинг на звёзды", callback_data="stars_menu")],
-        [InlineKeyboardButton("🤝 Игра с другом на Lev", callback_data="mode:friend")],
-        [InlineKeyboardButton("🤝⭐ Игра с другом на звёзды", callback_data="friend_stars_soon")],
-        [InlineKeyboardButton("🎓 Тренировка", callback_data="mode:train")],
+        [InlineKeyboardButton("🎯 Матчмейкинг", callback_data="mode:mm")],
+        [InlineKeyboardButton("🤝 Игра с другом", callback_data="mode:friend")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
     ]
 
@@ -1629,6 +1625,7 @@ async def friend_stars_soon(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     q = update.callback_query
     await q.answer()
+    return await mode_unavailable(q)  # игры на звёзды отключены
     await delete_and_send_new(
         q,
         "Игра с другом на звёзды пока в разработке 🛠\n"
@@ -3054,6 +3051,38 @@ stars_match_payments: Dict[str, set[int]] = {}
 stars_credit: Dict[int, int] = defaultdict(int)
 
 
+PLAYABLE_MODES = ("mm", "friend")  # тренировка и игры на звёзды отключены
+
+
+async def mode_unavailable(q) -> None:
+    await delete_and_send_new(
+        q,
+        "Этот режим больше недоступен. Игра идёт только на Lev: матчмейкинг или игра с другом.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("▶️ Играть", callback_data="play_menu")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
+            ]
+        ),
+    )
+
+
+def charge_stakes(m: Match) -> Optional[int]:
+    """
+    Списать ставку с обоих игроков в момент старта матча.
+    Возвращает None, если всё списано, иначе id игрока, у которого не хватило Lev
+    (у второго ничего не списывается / списанное возвращается).
+    """
+    if m.stake <= 0 or m.p2 is None:
+        return None
+    if not sub_lev_safe(m.p1, m.stake):
+        return m.p1
+    if not sub_lev_safe(m.p2, m.stake):
+        add_lev(m.p1, m.stake)
+        return m.p2
+    return None
+
+
 def opponent_of(m: Match, uid: int) -> Optional[int]:
     if uid == m.p1:
         return m.p2
@@ -3070,6 +3099,8 @@ async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     mode = q.data.split(":")[1]
+    if mode not in PLAYABLE_MODES:
+        return await mode_unavailable(q)
 
     # 🔥 Проверка реквизитов — без них нельзя в матчмейкинг и дуэль на Lev
     if mode in ("mm", "friend") and not has_requisites(q.from_user.id):
@@ -3102,6 +3133,7 @@ async def stars_menu_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     q = update.callback_query
     await q.answer()
+    return await mode_unavailable(q)  # игры на звёзды отключены
 
     push_menu(context, "stars_menu")  # важно для кнопки "назад"
 
@@ -3166,6 +3198,8 @@ async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: 
     if mode is None:
         await q.answer()
         _, mode, _t = q.data.split(":")
+    if mode not in PLAYABLE_MODES:
+        return await mode_unavailable(q)
     # игра всегда на попадание (старые кнопки «до N» тоже ведут сюда)
     target = GAME_TARGET
 
@@ -3223,8 +3257,7 @@ async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: 
                 ]
             ),
         )
-    if not sub_lev_safe(q.from_user.id, stake):
-        return await q.answer("Не удалось списать ставку", show_alert=True)
+    # Ставка НЕ списывается сейчас — только когда матч начнётся.
 
     mid = secrets.token_hex(6)
     m = Match(
@@ -3245,7 +3278,7 @@ async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: 
     if mode == "mm":
         mm_queue[target].append(mid)
         await q.edit_message_text(
-            f"🎯 Вы в очереди (игра на попадание). Ставка списана: {stake} Lev. Ждём соперника…",
+            f"🎯 Вы в очереди (игра на попадание). Ставка: {stake} Lev — спишется, когда найдётся соперник и матч начнётся.\nЖдём соперника…",
             reply_markup=back_to_main_kb(),
         )
         asyncio.create_task(
@@ -3266,7 +3299,7 @@ async def choose_goal(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: 
     link = f"https://t.me/{me.username}?start=invite_{token}"
     await q.edit_message_text(
         f"🤝 Дуэль на попадание.\n"
-        f"Ставка списана: {stake} Lev.\n\n"
+        f"Ставка: {stake} Lev — спишется у обоих, когда друг примет приглашение и матч начнётся.\n\n"
         f"Отправь другу эту ссылку:\n{link}\n\n"
         "Как друг подтвердит — матч начнётся.",
         reply_markup=back_to_main_kb(),
@@ -3282,6 +3315,7 @@ async def stars_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     q = update.callback_query
     await q.answer()
+    return await mode_unavailable(q)  # игры на звёзды отключены
     _, stake_s, target_s = q.data.split(":")
     stake = int(stake_s)
     target = GAME_TARGET  # игра на попадание
@@ -3327,8 +3361,7 @@ async def mm_timeout(mid: str, target: int, uid: int, stake: int):
     except ValueError:
         pass
     matches.pop(mid, None)
-    # возвращаем Lev
-    add_lev(uid, stake)
+    # ставка не списывалась — возвращать нечего
 
 
 async def stars_mm_timeout(mid: str, key: str, uid: int):
@@ -3388,8 +3421,36 @@ async def try_matchmaking(target: int, context: ContextTypes.DEFAULT_TYPE):
         mid1, mid2 = q.pop(0), q.pop(0)
         m1, m2 = matches.get(mid1), matches.get(mid2)
         if not m1 or not m2:
+            for mid, mm in ((mid1, m1), (mid2, m2)):
+                if mm:
+                    q.insert(0, mid)
             continue
+        if m1.p1 == m2.p1:
+            # один и тот же игрок встал в очередь дважды — оставляем одну заявку
+            matches.pop(mid2, None)
+            q.insert(0, mid1)
+            break
+
         m1.p2 = m2.p1
+        # списываем ставки только сейчас, когда матч начинается
+        short = charge_stakes(m1)
+        if short is not None:
+            keep_mid = mid2 if short == m1.p1 else mid1
+            drop_mid = mid1 if short == m1.p1 else mid2
+            m1.p2 = None
+            matches.pop(drop_mid, None)
+            q.insert(0, keep_mid)
+            try:
+                await context.bot.send_message(
+                    short,
+                    f"❗ Соперник найден, но на балансе не хватает Lev для ставки ({m1.stake}). "
+                    "Ты убран из очереди.",
+                    reply_markup=back_to_main_kb(),
+                )
+            except Exception:
+                pass
+            continue
+
         m1.score[m1.p2] = 0
         m1.throws[m1.p2] = 0
         m1.first_throw_done[m1.p2] = False
@@ -4383,7 +4444,13 @@ async def rematch_offer_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # тренировка/бот тоже сюда попадёт — ниже обработаем
         pass
 
-    # --- ТРЕНИРОВКА / БОТ ---
+    # тренировка и звёздные дуэли отключены
+    if mode not in PLAYABLE_MODES or opponent_id == BOT_ID:
+        return await q.answer(
+            "Этот режим больше недоступен. Сыграй через «▶️ Играть».", show_alert=True
+        )
+
+    # --- ТРЕНИРОВКА / БОТ (отключено) ---
     if mode == "train" or opponent_id == BOT_ID:
         mid = secrets.token_hex(6)
         m = Match(
@@ -4534,6 +4601,8 @@ async def rematch_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = offer["target"]
     stake = offer["stake"]
     mode = offer["mode"]
+    if mode not in PLAYABLE_MODES:
+        return await q.edit_message_text("Этот режим больше недоступен.", reply_markup=back_to_main_kb())
 
     # STARS REMATCH — без списания Lev
     if mode == "stars":
@@ -4674,20 +4743,43 @@ async def invite_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if opponent_id == creator_id:
         return await q.answer("Нельзя принять свой инвайт.", show_alert=True)
 
-    # списываем Lev у принимающего
-    if not sub_lev_safe(opponent_id, stake):
-        return await q.edit_message_text(
-            f"Недостаточно Lev для участия. Нужно {stake}.",
-            reply_markup=back_to_main_kb(),
-        )
-
     m = matches.get(mid)
     if not m or m.p2 is not None:
-        add_lev(opponent_id, stake)  # вернуть списанное
         invites.pop(token, None)
         return await q.edit_message_text("Матч неактуален.", reply_markup=back_to_main_kb())
 
+    # списываем ставку у обоих только сейчас — матч начинается
     m.p2 = opponent_id
+    short = charge_stakes(m)
+    if short == opponent_id:
+        m.p2 = None
+        return await q.edit_message_text(
+            f"Недостаточно Lev для участия. Нужно {stake} Lev, у тебя {get_lev(opponent_id)}.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("💸 Пополнить Lev", callback_data="shop")],
+                    [InlineKeyboardButton("🏠 В главное меню", callback_data="menu")],
+                ]
+            ),
+        )
+    if short == creator_id:
+        m.p2 = None
+        invites.pop(token, None)
+        matches.pop(mid, None)
+        try:
+            await context.bot.send_message(
+                creator_id,
+                f"❗ {display_name(opponent_id)} принял дуэль, но у тебя не хватает Lev "
+                f"для ставки ({stake}). Дуэль отменена.",
+                reply_markup=back_to_main_kb(),
+            )
+        except Exception:
+            pass
+        return await q.edit_message_text(
+            "У соперника не хватает Lev для ставки — дуэль отменена.",
+            reply_markup=back_to_main_kb(),
+        )
+
     m.score[opponent_id] = 0
     m.throws[opponent_id] = 0
     m.first_throw_done[opponent_id] = False
@@ -4706,13 +4798,12 @@ async def invite_decline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     offer = invites.pop(token, None)
 
     if offer:
-        add_lev(offer["creator_id"], offer["stake"])
         mid = offer["match_id"]
         matches.pop(mid, None)
         try:
             await context.bot.send_message(
                 offer["creator_id"],
-                "Оппонент отказался от дуэли. Ставка возвращена.",
+                "Оппонент отказался от дуэли. Ставка не списывалась.",
                 reply_markup=back_to_main_kb(),
             )
         except Exception:
