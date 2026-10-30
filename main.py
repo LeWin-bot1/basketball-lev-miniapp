@@ -112,6 +112,20 @@ async def send_photo_best_effort(
         )
 
 
+# последнее сообщение-меню в каждом чате: chat_id -> message_id
+# (в чате всегда остаётся одно меню, даже если быстро нажать две кнопки)
+last_menu_msg: Dict[int, int] = {}
+
+
+async def drop_last_menu(bot, chat_id: int, keep: Optional[int] = None) -> None:
+    mid = last_menu_msg.pop(chat_id, None)
+    if mid and mid != keep:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
 # неоплаченные счета на пополнение: chat_id -> message_id
 # (убираем их, как только игрок уходит в другое меню или жмёт «Отмена»)
 pending_invoices: Dict[int, int] = {}
@@ -137,22 +151,29 @@ async def delete_and_send_new(
     Используется для красивой навигации по меню.
     Заодно убирает неоплаченный счёт, если он висит в чате.
     """
+    bot = query.message.get_bot()
+    chat_id = query.message.chat_id
     try:
-        await drop_pending_invoice(query.message.get_bot(), query.message.chat_id)
+        await drop_pending_invoice(bot, chat_id)
     except Exception:
         pass
+    # предыдущее меню (если нажали кнопку в более старом сообщении)
+    await drop_last_menu(bot, chat_id, keep=query.message.message_id)
     try:
-        # Удаляем старое сообщение
+        # Удаляем сообщение, в котором нажали кнопку
         await query.message.delete()
     except Exception:
         pass
-    
-    # Отправляем новое сообщение
-    return await query.message.reply_text(
+
+    # Отправляем новое сообщение и запоминаем его как текущее меню
+    msg = await bot.send_message(
+        chat_id=chat_id,
         text=text,
         reply_markup=reply_markup,
         parse_mode=parse_mode,
     )
+    last_menu_msg[chat_id] = msg.message_id
+    return msg
 
 
 # -------------------- DB --------------------
@@ -1301,11 +1322,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     else:
         # Пользователь уже видел приветствие - показываем главное меню
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
+        chat_id = update.effective_chat.id
+        await drop_last_menu(context.bot, chat_id)
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
             text="Главное меню:",
             reply_markup=main_menu(u.id),
         )
+        last_menu_msg[chat_id] = msg.message_id
 
 
 async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
