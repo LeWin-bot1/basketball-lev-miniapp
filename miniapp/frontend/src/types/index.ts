@@ -56,6 +56,9 @@ export interface TournamentLeaderboard {
   current_user_rank?: number;
   tournament_end_date?: string;
   prize?: string;
+  status?: 'active' | 'finished';
+  end_ts?: number;
+  winners?: TournamentPlayer[];
 }
 
 export interface TeamMember {

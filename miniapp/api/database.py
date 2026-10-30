@@ -106,6 +106,15 @@ def get_leaderboard(page: int = 1, per_page: int = 50) -> Tuple[List[dict], int]
 
 # -------------------- Tournament Functions --------------------
 
+def get_config_value(key: str) -> Optional[str]:
+    """Значение из таблицы config бота (None, если нет)."""
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
+            return row["value"] if row else None
+    except sqlite3.OperationalError:
+        return None
+
 def get_solo_tournament_leaderboard(limit: int = 100) -> Tuple[List[dict], int]:
     """Получить таблицу одиночного турнира"""
     with get_db() as conn:

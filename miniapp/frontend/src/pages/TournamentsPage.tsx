@@ -1,283 +1,284 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, Users, Clock, Medal, Wifi, WifiOff } from 'lucide-react';
+import { Trophy, Clock, Medal, Users, Gift, Wifi, WifiOff, Crown } from 'lucide-react';
 import { api } from '../api/client';
 import { useTournamentWebSocket } from '../hooks/useWebSocket';
-import type { TournamentLeaderboard, TeamLeaderboard, TournamentPlayer, TournamentTeam } from '../types';
+import type { TournamentLeaderboard, TournamentPlayer } from '../types';
 import LeaderboardRow from '../components/LeaderboardRow';
 import { PageLoader } from '../components/LoadingSpinner';
 
-type TabType = 'solo' | 'team';
-
-// Моковые данные
-const mockSoloTournament: TournamentLeaderboard = {
+// Моковые данные для разработки
+const mockTournament: TournamentLeaderboard = {
   type: 'solo',
-  players: Array.from({ length: 15 }, (_, i) => ({
+  players: Array.from({ length: 12 }, (_, i) => ({
     user_id: 1000 + i,
     username: `champ_${i + 1}`,
-    first_name: `Чемпион ${i + 1}`,
-    wins: 50 - i * 3,
-    losses: 5 + i,
-    points: (50 - i * 3) * 3,
+    first_name: `Игрок ${i + 1}`,
+    wins: 40 - i * 3,
+    losses: 4 + i,
+    points: (40 - i * 3) * 3,
   })),
-  total_participants: 120,
-  current_user_rank: 8,
+  total_participants: 87,
+  current_user_rank: 6,
+  prize: 'майка Prada',
+  status: 'active',
+  end_ts: Math.floor(Date.now() / 1000) + 3 * 86400 + 5 * 3600,
+  winners: [],
 };
 
-const mockTeamTournament: TeamLeaderboard = {
-  teams: Array.from({ length: 10 }, (_, i) => ({
-    team_id: 100 + i,
-    name: `Team Alpha ${i + 1}`,
-    wins: 30 - i * 2,
-    losses: 5 + i,
-    tournament_points: (30 - i * 2) * 3,
-    members: [],
-  })),
-  total_teams: 45,
-  current_team_rank: 5,
-};
+function playerName(p: TournamentPlayer): string {
+  return p.game_nick || p.first_name || (p.username ? `@${p.username}` : `ID ${p.user_id}`);
+}
 
-function formatDeadline(isoDate?: string): string {
-  if (!isoDate) return 'Дата уточняется';
-  const end = new Date(`${isoDate}T23:59:59`);
-  const diff = end.getTime() - Date.now();
-  if (diff <= 0) return 'Турнир завершён';
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-  if (days > 0) return `${days} дн. ${hours} ч.`;
-  return `${hours} ч.`;
+function endTs(data: TournamentLeaderboard | null): number | null {
+  if (!data) return null;
+  if (data.end_ts) return data.end_ts;
+  if (data.tournament_end_date) return Math.floor(new Date(`${data.tournament_end_date}T00:00:00`).getTime() / 1000);
+  return null;
+}
+
+/** Живой обратный отсчёт: дни / часы / минуты / секунды */
+function useCountdown(target: number | null) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  if (!target) return null;
+  const left = Math.max(0, target * 1000 - now);
+  return {
+    done: left === 0,
+    days: Math.floor(left / 86_400_000),
+    hours: Math.floor((left / 3_600_000) % 24),
+    minutes: Math.floor((left / 60_000) % 60),
+    seconds: Math.floor((left / 1000) % 60),
+  };
+}
+
+function TimeBox({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="flex-1 bg-white/15 backdrop-blur rounded-xl py-2 text-center">
+      <div className="text-2xl font-extrabold tabular-nums leading-tight">
+        {String(value).padStart(2, '0')}
+      </div>
+      <div className="text-[11px] uppercase tracking-wide opacity-80">{label}</div>
+    </div>
+  );
+}
+
+const PODIUM = [
+  { place: 2, medal: '🥈', height: 'h-20', ring: 'ring-gray-300', bg: 'from-gray-100 to-gray-200' },
+  { place: 1, medal: '🥇', height: 'h-28', ring: 'ring-yellow-400', bg: 'from-yellow-100 to-amber-200' },
+  { place: 3, medal: '🥉', height: 'h-16', ring: 'ring-orange-300', bg: 'from-orange-100 to-orange-200' },
+];
+
+function Podium({
+  top,
+  onOpen,
+}: {
+  top: TournamentPlayer[];
+  onOpen: (id: number) => void;
+}) {
+  return (
+    <div className="flex items-end justify-center gap-2">
+      {PODIUM.map(({ place, medal, height, ring, bg }) => {
+        const p = top[place - 1];
+        return (
+          <div key={place} className="flex-1 flex flex-col items-center min-w-0">
+            {p ? (
+              <button
+                onClick={() => onOpen(p.user_id)}
+                className="flex flex-col items-center w-full min-w-0 mb-2"
+              >
+                {place === 1 && <Crown size={20} className="text-yellow-500 mb-1" />}
+                <div
+                  className={`w-12 h-12 rounded-full bg-white ring-4 ${ring} flex items-center justify-center text-2xl shadow`}
+                >
+                  {medal}
+                </div>
+                <div className="mt-1 text-sm font-semibold text-gray-900 truncate w-full text-center">
+                  {playerName(p)}
+                </div>
+                <div className="text-xs text-gray-500">{p.wins} побед</div>
+              </button>
+            ) : (
+              <div className="mb-2 text-xs text-gray-300">—</div>
+            )}
+            <div
+              className={`w-full ${height} rounded-t-xl bg-gradient-to-b ${bg} flex items-start justify-center pt-2 text-lg font-extrabold text-gray-700`}
+            >
+              {place}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function TournamentsPage() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabType>('solo');
-  const [soloData, setSoloData] = useState<TournamentLeaderboard | null>(null);
-  const [teamData, setTeamData] = useState<TeamLeaderboard | null>(null);
+  const [data, setData] = useState<TournamentLeaderboard | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // WebSocket для real-time обновлений (только в production)
   const isDev = import.meta.env.DEV;
-  
-  const handleSoloUpdate = useCallback((data: unknown) => {
-    const message = data as { type: string; data?: { players?: TournamentPlayer[]; total_participants?: number } };
-    if (message.type === 'tournament_update' || message.type === 'initial_data') {
-      if (message.data?.players) {
-        setSoloData((prev) => prev ? {
-          ...prev,
-          players: message.data!.players!,
-          total_participants: message.data!.total_participants ?? prev.total_participants,
-        } : null);
-      }
+
+  const handleUpdate = useCallback((msg: unknown) => {
+    const m = msg as { type: string; data?: { players?: TournamentPlayer[]; total_participants?: number } };
+    if ((m.type === 'tournament_update' || m.type === 'initial_data') && m.data?.players) {
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              players: m.data!.players!,
+              total_participants: m.data!.total_participants ?? prev.total_participants,
+            }
+          : prev
+      );
     }
   }, []);
 
-  const handleTeamUpdate = useCallback((data: unknown) => {
-    const message = data as { type: string; data?: { teams?: TournamentTeam[]; total_teams?: number } };
-    if (message.type === 'tournament_update' || message.type === 'initial_data') {
-      if (message.data?.teams) {
-        setTeamData((prev) => prev ? {
-          ...prev,
-          teams: message.data!.teams!,
-          total_teams: message.data!.total_teams ?? prev.total_teams,
-        } : null);
-      }
-    }
-  }, []);
-
-  // Подключаем WebSocket только если не в режиме разработки
-  const { isConnected: soloConnected } = useTournamentWebSocket(
-    'solo',
-    !isDev ? handleSoloUpdate : undefined
-  );
-  const { isConnected: teamConnected } = useTournamentWebSocket(
-    'team', 
-    !isDev ? handleTeamUpdate : undefined
-  );
-
-  const isWsConnected = activeTab === 'solo' ? soloConnected : teamConnected;
+  const { isConnected } = useTournamentWebSocket('solo', !isDev ? handleUpdate : undefined);
 
   useEffect(() => {
-    async function loadData() {
+    (async () => {
       try {
-        setLoading(true);
-        
         if (isDev) {
           await new Promise((r) => setTimeout(r, 300));
-          setSoloData(mockSoloTournament);
-          setTeamData(mockTeamTournament);
+          setData(mockTournament);
         } else {
-          const [solo, team] = await Promise.all([
-            api.tournaments.getSolo(),
-            api.tournaments.getTeam(),
-          ]);
-          setSoloData(solo);
-          setTeamData(team);
+          setData(await api.tournaments.getSolo());
         }
       } catch (err) {
-        console.error('Error loading tournaments:', err);
+        console.error('Error loading tournament:', err);
       } finally {
         setLoading(false);
       }
-    }
-
-    loadData();
+    })();
   }, [isDev]);
 
-  if (loading) {
-    return <PageLoader />;
-  }
+  const countdown = useCountdown(endTs(data));
+
+  if (loading) return <PageLoader />;
+
+  const finished = data?.status === 'finished' || countdown?.done === true;
+  const players = data?.players ?? [];
+  const top = finished && data?.winners?.length ? data.winners : players.slice(0, 3);
+  const endDate = endTs(data)
+    ? new Date(endTs(data)! * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+    : null;
+  const openPlayer = (id: number) => navigate(`/player/${id}`);
 
   return (
     <div className="p-4 page-transition">
       {/* Заголовок */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Trophy className="text-primary-500" />
-            Турниры
-          </h1>
-          {/* Индикатор WebSocket соединения */}
-          {!isDev && (
-            <div className={`flex items-center gap-1 text-xs ${isWsConnected ? 'text-green-500' : 'text-gray-400'}`}>
-              {isWsConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
-              {isWsConnected ? 'Live' : 'Offline'}
-            </div>
-          )}
-        </div>
-        <p className="text-gray-500 mt-1">Текущие турнирные таблицы</p>
-      </div>
-
-      {/* Информация о турнире */}
-      <div className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-2xl p-4 mb-6 text-white">
-        <div className="flex items-center gap-2 mb-2">
-          <Clock size={18} />
-          <span className="text-sm opacity-90">До конца турнира</span>
-        </div>
-        <div className="text-2xl font-bold">
-          {formatDeadline(
-            activeTab === 'solo'
-              ? soloData?.tournament_end_date
-              : teamData?.tournament_end_date
-          )}
-        </div>
-        <div className="mt-3 text-sm opacity-75">
-          Приз:{' '}
-          {activeTab === 'solo'
-            ? soloData?.prize || 'майка Prada'
-            : teamData?.prize || '10000 тг Sta'}
-        </div>
-      </div>
-
-      {/* Табы */}
-      <div className="flex bg-gray-100 rounded-xl p-1 mb-6">
-        <button
-          onClick={() => setActiveTab('solo')}
-          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-            activeTab === 'solo'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500'
-          }`}
-        >
-          <Trophy size={16} className="inline mr-1" />
-          Одиночный
-        </button>
-        <button
-          onClick={() => setActiveTab('team')}
-          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-            activeTab === 'team'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500'
-          }`}
-        >
-          <Users size={16} className="inline mr-1" />
-          Командный
-        </button>
-      </div>
-
-      {/* Твоя позиция */}
-      {activeTab === 'solo' && soloData?.current_user_rank && (
-        <div className="bg-yellow-50 rounded-xl p-4 mb-4 border border-yellow-200">
-          <div className="flex items-center gap-2">
-            <Medal className="text-yellow-600" size={20} />
-            <span className="text-sm text-yellow-700">Твоя позиция в турнире:</span>
-            <span className="font-bold text-yellow-800">#{soloData.current_user_rank}</span>
-          </div>
-        </div>
-      )}
-      
-      {activeTab === 'team' && teamData?.current_team_rank && (
-        <div className="bg-blue-50 rounded-xl p-4 mb-4 border border-blue-200">
-          <div className="flex items-center gap-2">
-            <Users className="text-blue-600" size={20} />
-            <span className="text-sm text-blue-700">Позиция твоей команды:</span>
-            <span className="font-bold text-blue-800">#{teamData.current_team_rank}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Список */}
-      <div className="space-y-2">
-        {activeTab === 'solo' &&
-          (soloData?.players.length ? (
-            soloData.players.map((player: TournamentPlayer, index: number) => (
-              <LeaderboardRow
-                key={player.user_id}
-                rank={index + 1}
-                name={player.game_nick || player.first_name || player.username || `ID: ${player.user_id}`}
-                username={player.username}
-                wins={player.wins}
-                losses={player.losses}
-                points={player.points}
-                onClick={() => navigate(`/player/${player.user_id}`)}
-              />
-            ))
-          ) : (
-            <div className="text-center py-10 text-gray-400 text-sm">
-              Таблица одиночного турнира пуста. Очки идут за матчи на Lev.
-            </div>
-          ))}
-
-        {activeTab === 'team' && !teamData?.teams.length && (
-          <div className="text-center py-10 text-gray-400 text-sm">
-            Командная таблица пуста. Создай команду в боте и сыграй матч.
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <Trophy className="text-primary-500" />
+          Турнир
+        </h1>
+        {!isDev && !finished && (
+          <div className={`flex items-center gap-1 text-xs ${isConnected ? 'text-green-500' : 'text-gray-400'}`}>
+            {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
+            {isConnected ? 'Live' : 'Offline'}
           </div>
         )}
-
-        {activeTab === 'team' &&
-          teamData?.teams.map((team: TournamentTeam, index: number) => (
-            <div
-              key={team.team_id}
-              className="bg-white rounded-xl p-4 border border-gray-100"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-8 text-center">
-                  {index < 3 ? (
-                    <span className="text-xl">
-                      {index === 0 && '🥇'}
-                      {index === 1 && '🥈'}
-                      {index === 2 && '🥉'}
-                    </span>
-                  ) : (
-                    <span className="text-sm font-medium text-gray-400">
-                      #{index + 1}
-                    </span>
-                  )}
-                </div>
-                <div className="flex-1">
-                  <div className="font-semibold text-gray-900">{team.name}</div>
-                  <div className="text-xs text-gray-400">
-                    {team.wins}W / {team.losses}L
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="font-bold text-primary-600">
-                    {team.tournament_points} очков
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
       </div>
+
+      {/* Главная карточка: обратный отсчёт или итог */}
+      <div
+        className={`rounded-2xl p-4 mb-5 text-white shadow-lg ${
+          finished
+            ? 'bg-gradient-to-br from-gray-700 to-gray-900'
+            : 'bg-gradient-to-br from-primary-500 via-primary-600 to-accent-500'
+        }`}
+      >
+        {finished ? (
+          <>
+            <div className="flex items-center gap-2 text-sm opacity-90">
+              <Trophy size={16} /> Турнир завершён{endDate ? ` · ${endDate}` : ''}
+            </div>
+            <div className="mt-2 text-xl font-extrabold">
+              {top[0] ? `Победитель — ${playerName(top[0])} 🎉` : 'Победитель не определён'}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 text-sm opacity-90 mb-3">
+              <Clock size={16} /> До конца турнира
+            </div>
+            {countdown && (
+              <div className="flex gap-2">
+                <TimeBox value={countdown.days} label="дней" />
+                <TimeBox value={countdown.hours} label="часов" />
+                <TimeBox value={countdown.minutes} label="минут" />
+                <TimeBox value={countdown.seconds} label="секунд" />
+              </div>
+            )}
+            {endDate && <div className="mt-3 text-xs opacity-80">Финиш: {endDate}</div>}
+          </>
+        )}
+
+        <div className="mt-4 flex gap-2 text-sm">
+          <div className="flex-1 flex items-center gap-2 bg-white/15 rounded-xl px-3 py-2">
+            <Gift size={16} />
+            <span className="truncate">{data?.prize || 'майка Prada'}</span>
+          </div>
+          <div className="flex items-center gap-2 bg-white/15 rounded-xl px-3 py-2">
+            <Users size={16} />
+            {data?.total_participants ?? 0}
+          </div>
+        </div>
+      </div>
+
+      {/* Пьедестал */}
+      {top.length > 0 && (
+        <div className="bg-white rounded-2xl p-4 mb-5 border border-gray-100">
+          <div className="text-sm font-semibold text-gray-500 mb-3">
+            {finished ? '🏆 Победители' : '🔥 Лидеры сейчас'}
+          </div>
+          <Podium top={top} onOpen={openPlayer} />
+        </div>
+      )}
+
+      {/* Твоя позиция */}
+      {data?.current_user_rank && (
+        <div className="bg-yellow-50 rounded-xl p-4 mb-4 border border-yellow-200 flex items-center gap-2">
+          <Medal className="text-yellow-600" size={20} />
+          <span className="text-sm text-yellow-700">
+            {finished ? 'Твоё итоговое место:' : 'Твоя позиция:'}
+          </span>
+          <span className="font-bold text-yellow-800">#{data.current_user_rank}</span>
+        </div>
+      )}
+
+      {/* Таблица */}
+      <div className="text-sm font-semibold text-gray-500 mb-2">Таблица</div>
+      <div className="space-y-2">
+        {players.length ? (
+          players.map((p, i) => (
+            <LeaderboardRow
+              key={p.user_id}
+              rank={i + 1}
+              name={playerName(p)}
+              username={p.username}
+              wins={p.wins}
+              losses={p.losses}
+              points={p.points}
+              onClick={() => openPlayer(p.user_id)}
+            />
+          ))
+        ) : (
+          <div className="text-center py-10 text-gray-400 text-sm">
+            {finished
+              ? 'Таблица турнира очищена — смотри победителей выше.'
+              : 'Пока никто не сыграл. Побеждай в матчах на Lev, чтобы попасть в таблицу!'}
+          </div>
+        )}
+      </div>
+
+      <p className="mt-4 text-center text-xs text-gray-400">
+        Победа в матче на Lev = 3 очка. Места — по числу побед.
+      </p>
     </div>
   );
 }

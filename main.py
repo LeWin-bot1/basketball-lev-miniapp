@@ -736,34 +736,41 @@ async def check_tournaments_maybe_finish(context: ContextTypes.DEFAULT_TYPE):
         return
 
     conn = db()
-    solo_row = conn.execute(
-        "SELECT user_id, wins FROM tournament_solo ORDER BY wins DESC, losses ASC LIMIT 1"
-    ).fetchone()
-    team_row = conn.execute(
-        "SELECT team_id, wins FROM tournament_team ORDER BY wins DESC, losses ASC LIMIT 1"
-    ).fetchone()
+    top = conn.execute(
+        "SELECT ts.user_id, p.username, p.first_name, p.game_nick, ts.wins, ts.losses "
+        "FROM tournament_solo ts JOIN players p ON p.user_id = ts.user_id "
+        "WHERE ts.wins > 0 OR ts.losses > 0 "
+        "ORDER BY ts.wins DESC, ts.losses ASC LIMIT 3"
+    ).fetchall()
     conn.close()
 
-    if ADMIN_ID:
-        if solo_row:
-            uid = solo_row["user_id"]
+    winners = [
+        {
+            "user_id": r["user_id"],
+            "username": r["username"],
+            "first_name": r["first_name"],
+            "game_nick": r["game_nick"],
+            "wins": r["wins"],
+            "losses": r["losses"],
+            "points": r["wins"] * 3,
+        }
+        for r in top
+    ]
+    # результаты сохраняем — их показывает Mini App после окончания турнира
+    set_config("tournament_result", json.dumps(winners, ensure_ascii=False))
+
+    if ADMIN_ID and winners:
+        places = "\n".join(
+            f"{i}. {display_name(w['user_id'])} (id={w['user_id']}) — {w['wins']} побед"
+            for i, w in enumerate(winners, start=1)
+        )
+        try:
             await context.bot.send_message(
                 ADMIN_ID,
-                f"🏆 Победитель одиночного турнира: {display_name(uid)} "
-                f"(user_id={uid}), приз: {TOURNAMENT_PRIZE_SOLO}",
+                f"🏆 Турнир завершён!\n{places}\n\nПриз победителю: {TOURNAMENT_PRIZE_SOLO}",
             )
-        if team_row:
-            team_id = team_row["team_id"]
-            team = db().execute("SELECT name FROM teams WHERE id=?", (team_id,)).fetchone()
-            members = get_team_members(team_id)
-            members_str = ", ".join(
-                display_name(m["user_id"]) for m in members
-            ) or "нет игроков"
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"🏆 Победитель командного турнира: команда «{team['name']}» (id={team_id})\n"
-                f"Игроки: {members_str}\nПриз: {TOURNAMENT_PRIZE_TEAM}",
-            )
+        except Exception:
+            pass
 
     # очистить таблицы турнира
     conn = db()
@@ -808,7 +815,11 @@ def main_menu(uid: int) -> InlineKeyboardMarkup:
     kb = [
         [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
         [InlineKeyboardButton("▶️ Играть", callback_data="play_menu")],
-        [InlineKeyboardButton("🏆 Турниры", callback_data="tournaments_menu")],
+        [
+            InlineKeyboardButton("🏆 Турнир", web_app=WebAppInfo(url=f"{MINIAPP_URL}/tournaments"))
+            if MINIAPP_URL
+            else InlineKeyboardButton("🏆 Турнир", callback_data="tournaments_menu")
+        ],
     ]
     
     # Добавляем кнопку команды в зависимости от того, есть ли у игрока команда
@@ -1106,9 +1117,10 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👥 <b>Команды</b>\n"
         "• Команда — до 3 игроков.\n"
         "• Название команды: только латиница, цифры и подчёркивание, 3–40 символов.\n\n"
-        "🏆 <b>Турниры до 01.12.2025</b>\n"
-        "• Одиночный турнир: главный приз — майка Prada.\n"
-        "• Командный турнир (команды до 3 игроков): приз — 10000 тг Sta на команду.\n"
+        "🏆 <b>Турнир до 01.06.2027</b>\n"
+        "• В зачёт идут победы в матчах на Lev.\n"
+        "• Главный приз — майка Prada.\n"
+        "• Таблица, время до конца и победители — в Mini App (кнопка «🏆 Турнир»).\n"
     )
     await update.message.reply_text(
         text,
@@ -1568,31 +1580,35 @@ async def play_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_and_send_new(q, text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def tournaments_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Турнир один: таблица, время до конца и победители — в Mini App."""
     q = update.callback_query
     await q.answer()
 
     push_menu(context, "tournaments_menu")
 
-    kb = [
-        [InlineKeyboardButton("👥 Командный турнир", callback_data="tournament_team")],
-        [InlineKeyboardButton("🏀 Одиночный турнир", callback_data="tournament_solo")],
-        [InlineKeyboardButton("🏆 Чемпионы", callback_data="champions")],
-    ]
-    
-    # Добавляем кнопку Mini App для детальной таблицы турнира
+    left = TOURNAMENT_DEADLINE_TS - int(time.time())
+    if left > 0:
+        days, hours = left // 86400, (left % 86400) // 3600
+        when = f"⏳ До конца: {days} дн. {hours} ч."
+    else:
+        when = "🏁 Турнир завершён"
+    text = (
+        "🏆 <b>Турнир</b>\n\n"
+        f"{when}\n"
+        f"🎁 Приз: {TOURNAMENT_PRIZE_SOLO}\n\n"
+        "В зачёт идут победы в матчах на Lev."
+    )
+
+    kb = []
     if MINIAPP_URL:
         kb.append([
             InlineKeyboardButton(
-                "📊 Полная таблица турнира",
-                web_app=WebAppInfo(url=f"{MINIAPP_URL}/tournaments")
+                "📊 Открыть турнир", web_app=WebAppInfo(url=f"{MINIAPP_URL}/tournaments")
             )
         ])
-    
     kb.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu")])
 
-    text = "Турниры:"
-
-    await delete_and_send_new(q, text, reply_markup=InlineKeyboardMarkup(kb))
+    await delete_and_send_new(q, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 
 
@@ -5151,6 +5167,7 @@ async def team_leave_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def tournament_solo_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await tournaments_menu(update, context)  # турнир теперь один
     q = update.callback_query
     await q.answer()
     await delete_and_send_new(
@@ -5164,6 +5181,7 @@ async def tournament_solo_btn(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def tournament_team_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await tournaments_menu(update, context)  # командный турнир убран
     q = update.callback_query
     await q.answer()
     await delete_and_send_new(

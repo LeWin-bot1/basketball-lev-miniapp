@@ -84,6 +84,9 @@ class TournamentLeaderboard(BaseModel):
     current_user_rank: Optional[int] = None
     tournament_end_date: Optional[str] = None
     prize: Optional[str] = None
+    status: str = "active"            # "active" | "finished"
+    end_ts: Optional[int] = None       # unix-время окончания турнира
+    winners: List[TournamentPlayer] = []  # топ-3 после окончания
 
 
 class TournamentTeam(BaseModel):

@@ -9,7 +9,9 @@ FastAPI backend для Telegram Mini App баскетбольного бота.
 """
 
 import asyncio
+import json
 import math
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -18,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import get_current_user, get_user_id_from_init_data, TelegramInitData
 from .database import (
+    get_config_value,
     get_player,
     get_player_rank,
     get_leaderboard,
@@ -55,6 +58,8 @@ from .models import (
 )
 
 TOURNAMENT_END_DATE = "2027-06-01"
+# то же время окончания, что и в боте (main.py: TOURNAMENT_DEADLINE_TS)
+TOURNAMENT_END_TS = int(time.mktime(time.strptime(TOURNAMENT_END_DATE, "%Y-%m-%d")))
 TOURNAMENT_PRIZE_SOLO = "майка Prada"
 TOURNAMENT_PRIZE_TEAM = "10000 тг Sta"
 
@@ -293,6 +298,19 @@ async def get_solo_tournament(
         for p in players_data
     ]
     
+    # статус турнира и победители
+    finished = time.time() >= TOURNAMENT_END_TS or get_config_value("tournament_finished") == "1"
+    winners: list = []
+    if finished:
+        saved = get_config_value("tournament_result")
+        if saved:
+            try:
+                winners = [TournamentPlayer(**w) for w in json.loads(saved)]
+            except Exception:
+                winners = []
+        if not winners:
+            winners = players[:3]  # бот ещё не подвёл итоги — берём текущий топ
+
     return TournamentLeaderboard(
         type="solo",
         players=players,
@@ -300,6 +318,9 @@ async def get_solo_tournament(
         current_user_rank=current_rank,
         tournament_end_date=TOURNAMENT_END_DATE,
         prize=TOURNAMENT_PRIZE_SOLO,
+        status="finished" if finished else "active",
+        end_ts=TOURNAMENT_END_TS,
+        winners=winners,
     )
 
 
