@@ -13,6 +13,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 
 from miniapp.api.main import app
@@ -59,6 +60,8 @@ async def lifespan(_app):
 
 
 app.router.lifespan_context = lifespan
+# сжатие ответов: Mini App грузится ~в 3 раза меньше
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.get("/")
