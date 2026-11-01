@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -12,7 +13,7 @@ from contextlib import contextmanager
 
 # Путь к базе данных бота
 BASE_DIR = Path(__file__).parent.parent.parent
-DB_PATH = BASE_DIR / "lev_game.db"
+DB_PATH = Path(os.getenv("DB_PATH") or (BASE_DIR / "lev_game.db"))  # тот же путь, что у бота
 
 
 @contextmanager

@@ -177,7 +177,13 @@ async def delete_and_send_new(
 
 
 # -------------------- DB --------------------
-DB_PATH = BASE_DIR / "lev_game.db"
+# Путь к базе: на Render — постоянный диск (DB_PATH=/var/data/lev_game.db),
+# локально — файл рядом с кодом.
+DB_PATH = Path(os.getenv("DB_PATH") or (BASE_DIR / "lev_game.db"))
+try:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 
 def db():
@@ -2676,6 +2682,30 @@ async def wd_admin_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     try:
         await q.edit_message_text(_wd_admin_text(row))
+    except Exception:
+        pass
+
+
+async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/backup — прислать админу копию базы (только админ)."""
+    if not is_admin(update.effective_user.id):
+        return
+    import shutil
+    import tempfile
+
+    tmp = Path(tempfile.gettempdir()) / f"lev_game_backup_{int(time.time())}.db"
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(tmp)
+    with dst:
+        src.backup(dst)  # корректная копия даже во время работы бота
+    src.close()
+    dst.close()
+    with open(tmp, "rb") as f:
+        await update.message.reply_document(
+            f, filename=tmp.name, caption=f"💾 Бэкап базы ({time.strftime('%Y-%m-%d %H:%M')})"
+        )
+    try:
+        tmp.unlink()
     except Exception:
         pass
 
@@ -5944,6 +5974,7 @@ def build_app():
     app.add_handler(CallbackQueryHandler(wd_confirm_btn, pattern=r"^wd_confirm$"))
     app.add_handler(CallbackQueryHandler(wd_admin_btn, pattern=r"^wadm_(pay|paid|rej):\d+$"))
     app.add_handler(CommandHandler("setfee", cmd_setfee))
+    app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CallbackQueryHandler(invoice_cancel_btn, pattern=r"^invoice_cancel$"))
     app.add_handler(CallbackQueryHandler(topup_star_amount_btn, pattern=r"^topup_star:\d+$"))
     app.add_handler(CallbackQueryHandler(topup_crypto_btn, pattern=r"^topup_crypto$"))
