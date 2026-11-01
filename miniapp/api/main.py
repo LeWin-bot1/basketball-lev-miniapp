@@ -21,6 +21,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import get_current_user, get_user_id_from_init_data, TelegramInitData
 from .database import (
     get_config_value,
+    get_deposits,
+    get_lev_stats,
+    get_saved_requisites,
+    get_tournament_entry,
+    get_withdrawals,
+    parse_requisites,
+    player_nick,
     get_player,
     get_player_rank,
     get_leaderboard,
@@ -198,28 +205,77 @@ async def get_my_matches(
     return MatchHistory(matches=[_to_match(m) for m in matches], total=total)
 
 
-@app.get("/api/profile/{user_id}", response_model=PlayerStats)
+@app.get("/api/me")
+async def get_me(user: TelegramInitData = Depends(get_current_user)):
+    """
+    Всё про текущего игрока для Mini App: баланс, подробная статистика,
+    место в турнире, реквизиты для вывода и последние матчи.
+    """
+    p = _player_or_create(user)
+    uid = p["user_id"]
+    wins = int(p.get("wins") or 0)
+    losses = int(p.get("losses") or 0)
+    played = int(p.get("matches_played") or (wins + losses))
+    lev = get_lev_stats(uid)
+    win_streak, best_win_streak = compute_win_streaks(uid)
+    matches, total_matches = get_match_history(uid, limit=20)
+    return {
+        "user_id": uid,
+        "nick": player_nick(p),
+        "username": p.get("username"),
+        "balance": int(p.get("lev") or 0),
+        "stats": {
+            "matches": played,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round(wins * 100 / (wins + losses)) if wins + losses else 0,
+            "lev_won": lev["won"],
+            "lev_lost": lev["lost"],
+            "lev_net": lev["won"] - lev["lost"],
+            "best_win": lev["best"],
+            "win_streak": win_streak,
+            "best_win_streak": best_win_streak,
+        },
+        "tournament": get_tournament_entry(uid),
+        "requisites": parse_requisites(get_saved_requisites(uid)),
+        "recent_matches": matches,
+        "total_matches": total_matches,
+    }
+
+
+@app.get("/api/wallet")
+async def get_wallet(user: TelegramInitData = Depends(get_current_user)):
+    """Баланс, история пополнений и выводов (со статусами) текущего игрока."""
+    p = _player_or_create(user)
+    uid = p["user_id"]
+    withdrawals = get_withdrawals(uid)
+    return {
+        "balance": int(p.get("lev") or 0),
+        "pending_withdraw_lev": sum(
+            w["lev"] for w in withdrawals if w["status"] in ("pending", "processing")
+        ),
+        "requisites": parse_requisites(get_saved_requisites(uid)),
+        "deposits": get_deposits(uid),
+        "withdrawals": withdrawals,
+    }
+
+
+@app.get("/api/profile/{user_id}")
 async def get_player_profile(
     user_id: int,
     _: TelegramInitData = Depends(get_current_user)
 ):
-    """Публичный профиль другого игрока: статистика и матчи."""
+    """Публичный профиль другого игрока: только ник и число матчей."""
     player_data = get_player(user_id)
     if not player_data:
         raise HTTPException(status_code=404, detail="Player not found")
-    
-    rank, total_players = get_player_rank(user_id)
-    matches, _ = get_match_history(user_id, limit=20)
-    win_streak, best_win_streak = compute_win_streaks(user_id)
-    
-    return PlayerStats(
-        player=_to_profile(player_data),
-        rank=rank,
-        total_players=total_players,
-        recent_matches=[_to_match(m) for m in matches],
-        win_streak=win_streak,
-        best_win_streak=best_win_streak,
-    )
+    wins = int(player_data.get("wins") or 0)
+    losses = int(player_data.get("losses") or 0)
+    return {
+        "user_id": user_id,
+        "nick": player_nick(player_data),
+        "matches": int(player_data.get("matches_played") or (wins + losses)),
+    }
 
 
 # -------------------- Leaderboard Endpoints --------------------

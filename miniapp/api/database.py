@@ -484,3 +484,187 @@ def compute_win_streaks(user_id: int) -> Tuple[int, int]:
         else:
             run = 0
     return current, max(best, current)
+
+
+# -------------------- Mini App v2: профиль, кошелёк --------------------
+
+def player_nick(p: Optional[dict]) -> str:
+    """Отображаемое имя игрока (как в боте)."""
+    if not p:
+        return "Игрок"
+    nick = p.get("game_nick") or p.get("first_name")
+    if nick:
+        return nick
+    if p.get("username"):
+        return f"@{p['username']}"
+    return f"Игрок {p.get('user_id')}"
+
+
+def get_lev_stats(user_id: int) -> dict:
+    """Выиграно / проиграно Lev и лучший выигрыш — по истории матчей."""
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT "
+                "COALESCE(SUM(CASE WHEN delta_lev > 0 THEN delta_lev END), 0) AS won, "
+                "COALESCE(SUM(CASE WHEN delta_lev < 0 THEN -delta_lev END), 0) AS lost, "
+                "COALESCE(MAX(delta_lev), 0) AS best "
+                "FROM match_history WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+            return {"won": int(row["won"]), "lost": int(row["lost"]), "best": max(0, int(row["best"]))}
+    except sqlite3.OperationalError:
+        return {"won": 0, "lost": 0, "best": 0}
+
+
+def get_tournament_entry(user_id: int) -> Optional[dict]:
+    """Строка игрока в турнире + место (или None, если не играл)."""
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT wins, losses FROM tournament_solo WHERE user_id=? AND (wins > 0 OR losses > 0)",
+                (user_id,),
+            ).fetchone()
+            if not row:
+                return None
+            total = conn.execute(
+                "SELECT COUNT(*) FROM tournament_solo WHERE wins > 0 OR losses > 0"
+            ).fetchone()[0]
+        return {
+            "rank": get_solo_tournament_rank(user_id),
+            "wins": row["wins"],
+            "losses": row["losses"],
+            "points": row["wins"] * 3,
+            "total": total,
+        }
+    except sqlite3.OperationalError:
+        return None
+
+
+def parse_requisites(saved: Optional[str]) -> Optional[dict]:
+    """Сохранённые крипто-реквизиты в удобном виде."""
+    if not saved:
+        return None
+    for prefix, kind, label in (
+        ("CRYPTOBOT:", "cryptobot", "Аккаунт @CryptoBot"),
+        ("USDT-TRC20:", "trc20", "USDT · TRC20 (Tron)"),
+        ("TON:", "ton", "Кошелёк в сети TON"),
+    ):
+        if saved.startswith(prefix):
+            value = saved[len(prefix):].strip()
+            return {"type": kind, "label": label, "value": value}
+    return None  # старые СБП/КАРТА больше не используются
+
+
+def _fmt_amount(value: float) -> str:
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def get_deposits(user_id: int, limit: int = 100) -> List[dict]:
+    """
+    Пополнения: оплаченные (purchases) + неоплаченные/истёкшие счета CryptoBot.
+    """
+    items: List[dict] = []
+    with get_db() as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, pack, lev, amount, currency, payload, status, created_at, paid_at "
+                "FROM purchases WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for r in rows:
+            cur = r["currency"]
+            if cur == "XTR":
+                method, amount = "stars", f"{r['amount']} ⭐"
+                details = "Telegram Stars"
+            elif cur in ("USDT", "TON"):
+                method, amount = cur.lower(), f"{_fmt_amount(r['amount'] / 100.0)} {cur}"
+                inv = (r["payload"] or "").replace("cryptopay:", "")
+                details = f"CryptoBot · счёт #{inv}" if inv else "CryptoBot"
+            elif cur == "RUB":
+                method, amount = "rub", f"{r['amount'] / 100.0:.2f} ₽"
+                details = "Оплата картой"
+            else:
+                method, amount, details = cur.lower(), f"{r['amount']} {cur}", cur
+            items.append({
+                "id": f"p{r['id']}",
+                "method": method,
+                "amount": amount,
+                "lev": r["lev"],
+                "status": "paid" if r["status"] == "paid" else r["status"],
+                "details": details,
+                "created_at": r["paid_at"] or r["created_at"],
+            })
+        try:
+            inv_rows = conn.execute(
+                "SELECT invoice_id, asset, amount, lev, status, created_at FROM crypto_invoices "
+                "WHERE user_id=? AND status != 'paid' ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            inv_rows = []
+        for r in inv_rows:
+            items.append({
+                "id": f"i{r['invoice_id']}",
+                "method": r["asset"].lower(),
+                "amount": f"{r['amount']} {r['asset']}",
+                "lev": r["lev"],
+                "status": r["status"],  # active | expired
+                "details": f"CryptoBot · счёт #{r['invoice_id']}",
+                "created_at": r["created_at"],
+            })
+    items.sort(key=lambda x: x["created_at"] or 0, reverse=True)
+    return items[:limit]
+
+
+def get_withdrawals(user_id: int, limit: int = 100) -> List[dict]:
+    """Выводы со статусами и местом в очереди."""
+    with get_db() as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(withdraw_requests)").fetchall()}
+        if not cols:
+            return []
+        extra = ", ".join(c for c in ("method", "asset", "crypto_amount", "reject_reason") if c in cols)
+        rows = conn.execute(
+            "SELECT id, lev, external_address, status, created_at, processed_at, tx_id"
+            + (f", {extra}" if extra else "")
+            + " FROM withdraw_requests WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = row_to_dict(r)
+            method = d.get("method") or "manual"
+            queue = None
+            if d["status"] in ("pending", "processing"):
+                queue = conn.execute(
+                    "SELECT COUNT(*) FROM withdraw_requests "
+                    "WHERE status IN ('pending','processing') AND id <= ?",
+                    (d["id"],),
+                ).fetchone()[0]
+            result.append({
+                "id": d["id"],
+                "lev": d["lev"],
+                "method": method,
+                "asset": d.get("asset"),
+                "amount": (f"{d['crypto_amount']} {d['asset']}" if d.get("crypto_amount") else None),
+                "destination": "@CryptoBot" if method == "cryptobot" else d.get("external_address"),
+                "status": d["status"],
+                "queue_position": queue,
+                "reject_reason": d.get("reject_reason"),
+                "created_at": d["created_at"],
+                "processed_at": d.get("processed_at"),
+            })
+    return result
+
+
+def get_saved_requisites(user_id: int) -> Optional[str]:
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT saved_requisites FROM players WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return row["saved_requisites"] if row else None
+    except sqlite3.OperationalError:
+        return None
