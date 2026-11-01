@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 
 from miniapp.api.main import app
 from miniapp.api.websocket import periodic_tournament_update
-from main import build_app, init_db
+from main import build_app, init_db, post_init
 
 FRONTEND_DIR = Path(__file__).parent / "miniapp" / "frontend" / "dist"
 
@@ -32,6 +32,11 @@ async def lifespan(_app):
 
     bot = build_app()
     await bot.initialize()
+    # то, что run_polling делает сам: кнопка Mini App + проверка неоплаченных крипто-счетов
+    try:
+        await post_init(bot)
+    except Exception as e:
+        logging.warning("post_init failed: %s", e)
     await bot.start()
     if bot.updater is None:
         raise RuntimeError("Telegram updater is not available")
