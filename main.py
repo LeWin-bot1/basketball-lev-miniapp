@@ -334,6 +334,10 @@ def init_db():
         "ALTER TABLE players ADD COLUMN stars_pending INTEGER DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_match_history_user ON match_history(user_id, played_at DESC)",
         "ALTER TABLE players ADD COLUMN stars_credit INTEGER DEFAULT 0",
+        "ALTER TABLE withdraw_requests ADD COLUMN method TEXT",
+        "ALTER TABLE withdraw_requests ADD COLUMN asset TEXT",
+        "ALTER TABLE withdraw_requests ADD COLUMN crypto_amount TEXT",
+        "ALTER TABLE withdraw_requests ADD COLUMN reject_reason TEXT",
     ]:
         try:
             cur.execute(sql)
@@ -741,8 +745,9 @@ def valid_requisites(text: str) -> bool:
 
 def withdraw_status_ru(code: str) -> str:
     return {
-        "pending": "в процессе",
-        "paid": "выплачена",
+        "pending": "ожидает",
+        "processing": "отправляется",
+        "paid": "выполнена",
         "rejected": "отклонена",
     }.get(code, code)
 
@@ -1335,6 +1340,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     text = update.message.text.strip()
+    # --- оформление вывода Lev (адрес / сумма) ---
+    if context.user_data.get("await_wd") in ("address", "amount"):
+        return await wd_text_input(update, context, text)
     # --- пользователь вводит количество Stars для вывода (кнопка "Вывести Stars") ---
     if context.user_data.get("await_stars_withdraw"):
         # сбросим флаг в любом случае, чтобы не зациклиться
@@ -2267,30 +2275,425 @@ async def balance_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------- WITHDRAW / REQUISITES (LEV) --------------------
+# -------------------- ВЫВОД LEV В КРИПТУ --------------------
+WD_METHODS = {
+    "cryptobot": "🤖 Вывести в CryptoBot (USDT / TON)",
+    "trc20": "💵 Вывести USDT (TRC20) на сторонний кошелёк",
+    "ton": "💎 Вывести TON на сторонний кошелёк",
+}
+WD_METHOD_SHORT = {"cryptobot": "CryptoBot", "trc20": "USDT TRC20", "ton": "TON-кошелёк"}
+WD_DECIMALS = {"USDT": 2, "TON": 3}
+
+
+def withdraw_fee_pct() -> float:
+    """Комиссия за вывод в % (меняется админом: /setfee 5). По умолчанию 0."""
+    try:
+        return max(0.0, float(get_config("withdraw_fee_pct", "0")))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def lev_to_crypto(lev: int, asset: str) -> str:
+    """Сколько монет получит игрок за lev (по курсу, минус комиссия), строкой для API."""
+    rate = get_rate(asset.lower())
+    net = lev * (1 - withdraw_fee_pct() / 100.0) / rate
+    d = WD_DECIMALS.get(asset, 2)
+    factor = 10 ** d
+    val = int(net * factor + 1e-9) / factor  # округляем вниз
+    return f"{val:.{d}f}"
+
+
+def withdraw_menu_kb() -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(lbl, callback_data=f"wd:{m}")] for m, lbl in WD_METHODS.items()]
+    rows.append([history_btn("withdrawals")])
+    rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
+
 async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
     push_menu(context, "withdraw_menu")
+    context.user_data.pop("wd", None)
+    context.user_data.pop("await_wd", None)
 
-    row = db().execute(
-        "SELECT saved_requisites FROM players WHERE user_id=?",
-        (q.from_user.id,),
-    ).fetchone()
-    saved = row["saved_requisites"] if row else None
+    fee = withdraw_fee_pct()
+    text = (
+        f"🏦 <b>Вывод Lev</b>\n💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n"
+        f"Курс вывода:\n• {get_rate('usdt'):g} Lev = 1 USDT\n• {get_rate('ton'):g} Lev = 1 TON\n"
+        f"Минимум: {WITHDRAW_MIN} Lev"
+        + (f" · комиссия {fee:g}%" if fee else "")
+        + "\n\nВыбери, куда вывести:"
+    )
+    await delete_and_send_new(q, text, reply_markup=withdraw_menu_kb(), parse_mode=ParseMode.HTML)
 
-    text = f"🏦 Вывод Lev\n💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n" + WITHDRAW_NOTE
-    if saved:
-        text += f"\n\nСохранённые реквизиты: {saved}"
 
-    kb = [
-        [InlineKeyboardButton("💸 Создать заявку на вывод", callback_data="withdraw_how")],
-        [history_btn("withdrawals")],
-        [InlineKeyboardButton("✏️ Изменить реквизиты", callback_data="requisites_menu")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
-    ]
-    
-    await delete_and_send_new(q, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+def _cancel_wd_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Назад", callback_data="withdraw_menu")]])
+
+
+def _wd_amount_prompt(wd: dict, balance: int) -> str:
+    asset = wd["asset"]
+    where = (
+        "на твой аккаунт в @CryptoBot"
+        if wd["method"] == "cryptobot"
+        else f"на адрес <code>{wd['address']}</code>"
+    )
+    return (
+        f"{WD_METHODS[wd['method']]}\n"
+        f"Монета: <b>{asset}</b>, {where}\n\n"
+        f"Курс: {get_rate(asset.lower()):g} Lev = 1 {asset}\n"
+        f"Доступно: {balance} Lev · минимум {WITHDRAW_MIN} Lev\n\n"
+        "✍️ Напиши сумму Lev для вывода, например <code>500</code>"
+    )
+
+
+async def _ask_wd_amount(q, context):
+    wd = context.user_data["wd"]
+    context.user_data["await_wd"] = "amount"
+    await delete_and_send_new(
+        q,
+        _wd_amount_prompt(wd, get_lev(q.from_user.id)),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_cancel_wd_kb(),
+    )
+
+
+async def wd_method_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбран способ вывода: cryptobot / trc20 / ton."""
+    q = update.callback_query
+    await q.answer()
+    method = q.data.split(":")[1]
+    if method not in WD_METHODS:
+        return
+    context.user_data.pop("await_wd", None)
+
+    if method == "cryptobot":
+        if not CRYPTO_PAY_TOKEN:
+            return await delete_and_send_new(
+                q, "Вывод в CryptoBot временно недоступен.", reply_markup=_cancel_wd_kb()
+            )
+        context.user_data["wd"] = {"method": "cryptobot"}
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("💵 USDT", callback_data="wd_asset:USDT"),
+                 InlineKeyboardButton("💎 TON", callback_data="wd_asset:TON")],
+                [InlineKeyboardButton("↩️ Назад", callback_data="withdraw_menu")],
+            ]
+        )
+        return await delete_and_send_new(
+            q,
+            "🤖 Вывод в @CryptoBot — деньги придут прямо на твой Telegram, без адреса и комиссии сети.\n\n"
+            "⚠️ Перед выводом открой @CryptoBot и нажми «Старт», иначе перевод не дойдёт.\n\n"
+            "В какой монете вывести?",
+            reply_markup=kb,
+        )
+
+    asset = "USDT" if method == "trc20" else "TON"
+    context.user_data["wd"] = {"method": method, "asset": asset}
+    context.user_data["await_wd"] = "address"
+
+    prefix = REQ_TYPES[method][1] + ": "
+    saved = get_requisites(q.from_user.id)
+    rows = []
+    if saved and saved.startswith(prefix):
+        addr = saved[len(prefix):]
+        context.user_data["wd"]["saved_address"] = addr
+        rows.append([InlineKeyboardButton(f"✅ На сохранённый: {addr[:6]}…{addr[-4:]}", callback_data="wd_saved")])
+    rows.append([InlineKeyboardButton("↩️ Назад", callback_data="withdraw_menu")])
+    hint = (
+        "Адрес USDT в сети TRC20 (Tron) — начинается с T, 34 символа."
+        if method == "trc20"
+        else "Адрес кошелька в сети TON — начинается с UQ или EQ, 48 символов."
+    )
+    await delete_and_send_new(
+        q,
+        f"{WD_METHODS[method]}\n\n✍️ Отправь адрес кошелька одним сообщением.\n{hint}\n\n"
+        "⚠️ Проверь сеть: перевод на неверный адрес вернуть нельзя.",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def wd_asset_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    asset = q.data.split(":")[1]
+    wd = context.user_data.get("wd")
+    if not wd or wd.get("method") != "cryptobot" or asset not in WD_DECIMALS:
+        return await withdraw_menu(update, context)
+    wd["asset"] = asset
+    await _ask_wd_amount(q, context)
+
+
+async def wd_saved_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    wd = context.user_data.get("wd")
+    if not wd or not wd.get("saved_address"):
+        return await withdraw_menu(update, context)
+    wd["address"] = wd["saved_address"]
+    await _ask_wd_amount(q, context)
+
+
+async def wd_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Ввод адреса или суммы во время оформления вывода."""
+    u = update.effective_user
+    chat_id = update.effective_chat.id
+    wd = context.user_data.get("wd") or {}
+    stage = context.user_data.get("await_wd")
+
+    async def reply(t, kb=None, html=False):
+        await drop_last_menu(context.bot, chat_id)
+        msg = await update.message.reply_text(
+            t, reply_markup=kb or _cancel_wd_kb(), parse_mode=ParseMode.HTML if html else None
+        )
+        last_menu_msg[chat_id] = msg.message_id
+
+    if not wd:
+        context.user_data.pop("await_wd", None)
+        return await reply("Выбери способ вывода:", kb=withdraw_menu_kb())
+
+    if stage == "address":
+        addr = text.strip()
+        if not valid_crypto_address(wd.get("method", ""), addr):
+            return await reply("❌ Похоже, адрес неверный. Проверь сеть и отправь адрес ещё раз:")
+        wd["address"] = addr
+        # запоминаем как реквизиты
+        conn = db()
+        conn.execute(
+            "UPDATE players SET saved_requisites=? WHERE user_id=?",
+            (f"{REQ_TYPES[wd['method']][1]}: {addr}", u.id),
+        )
+        conn.commit()
+        conn.close()
+        context.user_data["await_wd"] = "amount"
+        return await reply(_wd_amount_prompt(wd, get_lev(u.id)), html=True)
+
+    if stage == "amount":
+        try:
+            lev_amt = int(text.replace(" ", ""))
+        except ValueError:
+            return await reply("Сумма должна быть целым числом Lev, например 500.")
+        bal = get_lev(u.id)
+        if lev_amt < WITHDRAW_MIN:
+            return await reply(f"Минимальная сумма вывода: {WITHDRAW_MIN} Lev.")
+        if lev_amt > bal:
+            return await reply(f"Недостаточно Lev. Баланс: {bal} Lev.")
+        asset = wd["asset"]
+        amount = lev_to_crypto(lev_amt, asset)
+        if float(amount) <= 0:
+            return await reply("Слишком маленькая сумма для вывода. Укажи больше Lev.")
+        wd["lev"] = lev_amt
+        wd["amount"] = amount
+        context.user_data["await_wd"] = None
+        where = (
+            "в @CryptoBot (на твой Telegram)"
+            if wd["method"] == "cryptobot"
+            else f"на адрес <code>{wd['address']}</code>"
+        )
+        fee = withdraw_fee_pct()
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("✅ Подтвердить вывод", callback_data="wd_confirm")],
+                [InlineKeyboardButton("❌ Отмена", callback_data="withdraw_menu")],
+            ]
+        )
+        return await reply(
+            "Проверь заявку:\n\n"
+            f"Списать: <b>{lev_amt} Lev</b>\n"
+            f"Получишь: <b>{amount} {asset}</b> {where}"
+            + (f"\nКомиссия: {fee:g}%" if fee else "")
+            + "\n\nLev спишутся сразу, выплата — после обработки админом. "
+            "Если заявку отклонят, Lev вернутся.",
+            kb=kb,
+            html=True,
+        )
+
+
+def _wd_admin_kb(wid: int, method: str) -> InlineKeyboardMarkup:
+    first = (
+        InlineKeyboardButton("🤖 Отправить через CryptoBot", callback_data=f"wadm_pay:{wid}")
+        if method == "cryptobot"
+        else InlineKeyboardButton("✅ Выплачено (отправил вручную)", callback_data=f"wadm_paid:{wid}")
+    )
+    return InlineKeyboardMarkup(
+        [[first], [InlineKeyboardButton("❌ Отклонить и вернуть Lev", callback_data=f"wadm_rej:{wid}")]]
+    )
+
+
+def _wd_admin_text(r) -> str:
+    method = r["method"] or "old"
+    dest = f"@CryptoBot → tg_id {r['user_id']}" if method == "cryptobot" else (r["external_address"] or "—")
+    return (
+        f"💸 Заявка на вывод #{r['id']}\n"
+        f"Игрок: {display_name(r['user_id'])} (id={r['user_id']})\n"
+        f"Списано: {r['lev']} Lev\n"
+        f"К выплате: {r['crypto_amount'] or '—'} {r['asset'] or ''}\n"
+        f"Способ: {WD_METHOD_SHORT.get(method, method)}\n"
+        f"Куда: {dest}\n"
+        f"Статус: {withdraw_status_ru(r['status'])}"
+    )
+
+
+async def wd_confirm_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    u = q.from_user
+    wd = context.user_data.pop("wd", None)
+    context.user_data.pop("await_wd", None)
+    if not wd or "lev" not in wd:
+        return await withdraw_menu(update, context)
+
+    if not sub_lev_safe(u.id, wd["lev"]):
+        return await delete_and_send_new(
+            q, f"Недостаточно Lev. Баланс: {get_lev(u.id)} Lev.", reply_markup=withdraw_menu_kb()
+        )
+    address = wd.get("address") or f"CRYPTOBOT tg_id {u.id}"
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO withdraw_requests(user_id,lev,external_address,status,method,asset,crypto_amount) "
+        "VALUES(?,?,?,'pending',?,?,?)",
+        (u.id, wd["lev"], address, wd["method"], wd["asset"], wd["amount"]),
+    )
+    wid = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM withdraw_requests WHERE id=?", (wid,)).fetchone()
+    pos = conn.execute(
+        "SELECT COUNT(*) AS c FROM withdraw_requests WHERE status IN ('pending','processing') AND id<=?",
+        (wid,),
+    ).fetchone()["c"]
+    conn.close()
+
+    await delete_and_send_new(
+        q,
+        f"✅ Заявка #{wid} создана.\n"
+        f"{wd['lev']} Lev → {wd['amount']} {wd['asset']}\n"
+        f"Место в очереди: {pos}\n\n"
+        "Пришлём уведомление, когда выплата будет отправлена.",
+        reply_markup=InlineKeyboardMarkup(
+            [[history_btn("withdrawals")], [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")]]
+        ),
+    )
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(
+                ADMIN_ID, _wd_admin_text(row), reply_markup=_wd_admin_kb(wid, wd["method"])
+            )
+        except Exception:
+            pass
+
+
+async def _wd_notify(bot, uid: int, text: str):
+    try:
+        await bot.send_message(uid, text, reply_markup=back_to_main_kb())
+    except Exception:
+        pass
+
+
+def _wd_set_status(wid: int, status: str, *, tx: Optional[str] = None,
+                   reason: Optional[str] = None, refund_to: Optional[Tuple[int, int]] = None,
+                   from_statuses: Tuple[str, ...] = ("pending", "processing")) -> bool:
+    conn = db()
+    marks = ",".join("?" * len(from_statuses))
+    cur = conn.execute(
+        "UPDATE withdraw_requests SET status=?, processed_at=strftime('%s','now'), "
+        "tx_id=COALESCE(?, tx_id), reject_reason=COALESCE(?, reject_reason) "
+        f"WHERE id=? AND status IN ({marks})",
+        (status, tx, reason, wid, *from_statuses),
+    )
+    ok = cur.rowcount == 1
+    if ok and refund_to:
+        uid, lev = refund_to
+        conn.execute("UPDATE players SET lev=COALESCE(lev,0)+? WHERE user_id=?", (lev, uid))
+    conn.commit()
+    conn.close()
+    return ok
+
+
+async def wd_admin_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопки админа под заявкой: отправить через CryptoBot / выплачено / отклонить."""
+    q = update.callback_query
+    if not is_admin(q.from_user.id):
+        return await q.answer("Только для админа.", show_alert=True)
+    action, wid_s = q.data.split(":")
+    wid = int(wid_s)
+
+    conn = db()
+    row = conn.execute("SELECT * FROM withdraw_requests WHERE id=?", (wid,)).fetchone()
+    conn.close()
+    if not row:
+        return await q.answer("Заявка не найдена.", show_alert=True)
+    if row["status"] != "pending":
+        await q.answer(f"Заявка уже: {withdraw_status_ru(row['status'])}", show_alert=True)
+        try:
+            await q.edit_message_text(_wd_admin_text(row))
+        except Exception:
+            pass
+        return
+
+    if action == "wadm_pay":
+        # блокируем заявку от двойной отправки
+        if not _wd_set_status(wid, "processing", from_statuses=("pending",)):
+            return await q.answer("Заявка уже обрабатывается.", show_alert=True)
+        try:
+            res = await crypto_pay_call(
+                "transfer",
+                {
+                    "user_id": row["user_id"],
+                    "asset": row["asset"],
+                    "amount": row["crypto_amount"],
+                    "spend_id": f"lev-wd-{wid}",
+                    "comment": f"Вывод Lev #{wid}",
+                },
+            )
+        except Exception as e:
+            _wd_set_status(wid, "pending", from_statuses=("processing",))
+            return await q.answer(f"Не удалось отправить: {e}"[:190], show_alert=True)
+        _wd_set_status(wid, "paid", tx=f"cryptobot:{res.get('transfer_id')}")
+        await _wd_notify(
+            context.bot, row["user_id"],
+            f"✅ Вывод #{wid} выполнен: {row['crypto_amount']} {row['asset']} отправлены в @CryptoBot.",
+        )
+    elif action == "wadm_paid":
+        if not _wd_set_status(wid, "paid", tx="manual"):
+            return await q.answer("Заявка уже обработана.", show_alert=True)
+        await _wd_notify(
+            context.bot, row["user_id"],
+            f"✅ Вывод #{wid} выполнен: {row['crypto_amount']} {row['asset']} "
+            f"отправлены на {row['external_address']}.",
+        )
+    elif action == "wadm_rej":
+        if not _wd_set_status(wid, "rejected", reason="Отклонено админом",
+                              refund_to=(row["user_id"], row["lev"])):
+            return await q.answer("Заявка уже обработана.", show_alert=True)
+        await _wd_notify(
+            context.bot, row["user_id"],
+            f"❌ Заявка на вывод #{wid} отклонена. {row['lev']} Lev возвращены на баланс.",
+        )
+    await q.answer("Готово")
+    conn = db()
+    row = conn.execute("SELECT * FROM withdraw_requests WHERE id=?", (wid,)).fetchone()
+    conn.close()
+    try:
+        await q.edit_message_text(_wd_admin_text(row))
+    except Exception:
+        pass
+
+
+async def cmd_setfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/setfee <процент> — комиссия за вывод (только админ)."""
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        val = float(context.args[0].replace(",", "."))
+        assert 0 <= val < 100
+    except Exception:
+        return await update.message.reply_text(
+            f"Использование: /setfee <процент>, например /setfee 5\nСейчас: {withdraw_fee_pct():g}%"
+        )
+    set_config("withdraw_fee_pct", str(val))
+    await update.message.reply_text(f"✅ Комиссия за вывод: {val:g}%")
+
 
 async def stars_withdraw_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -2492,6 +2895,9 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     u = update.effective_user
     ensure_player(u)
+    return await update.message.reply_text(
+        "🏦 Вывод теперь через меню — выбери способ:", reply_markup=withdraw_menu_kb()
+    )
     if len(context.args) < 1:
         return await update.message.reply_text(
             "Использование: /withdraw &lt;Lev&gt;\nПример: <code>/withdraw 500</code>\n\n" + WITHDRAW_NOTE,
@@ -2691,7 +3097,7 @@ async def lev_withdraw_history_btn(update: Update, context: ContextTypes.DEFAULT
     await q.answer()
 
     rows = db().execute(
-        "SELECT id, lev, status, external_address "
+        "SELECT id, lev, status, external_address, crypto_amount, asset "
         "FROM withdraw_requests "
         "WHERE user_id=? ORDER BY id DESC LIMIT 20",
         (q.from_user.id,),
@@ -2708,7 +3114,9 @@ async def lev_withdraw_history_btn(update: Update, context: ContextTypes.DEFAULT
     for r in rows:
         st_ru = withdraw_status_ru(r["status"])
         lines.append(
-            f"#{r['id']}: {r['lev']} Lev → {r['external_address']} — {st_ru}"
+            f"#{r['id']}: {r['lev']} Lev → "
+            + (f"{r['crypto_amount']} {r['asset']}" if r["crypto_amount"] else str(r["external_address"]))
+            + f" — {st_ru}"
         )
 
     await delete_and_send_new(
@@ -2720,21 +3128,24 @@ async def lev_withdraw_history_btn(update: Update, context: ContextTypes.DEFAULT
 
 # -------------------- ADMIN: ВЫВОД LEV --------------------
 async def wlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Очередь заявок на вывод (по порядку), у каждой — кнопки обработки."""
     if not is_admin(update.effective_user.id):
         return
-    rows = db().execute(
-        "SELECT * FROM withdraw_requests ORDER BY id DESC LIMIT 20"
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM withdraw_requests WHERE status IN ('pending','processing') ORDER BY id ASC LIMIT 15"
     ).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) AS c FROM withdraw_requests WHERE status IN ('pending','processing')"
+    ).fetchone()["c"]
+    conn.close()
     if not rows:
-        return await update.message.reply_text("Заявок по Lev нет.", reply_markup=back_to_main_kb())
-    lines = ["Последние заявки на вывод Lev:"]
+        return await update.message.reply_text("✅ Очередь на вывод пуста.")
+    await update.message.reply_text(f"📋 Заявок в очереди: {total}" + (" (показаны первые 15)" if total > 15 else ""))
     for r in rows:
-        st = withdraw_status_ru(r["status"])
-        lines.append(
-            f"#{r['id']} | u{r['user_id']} | {r['lev']} Lev | "
-            f"{r['external_address']} | {st}"
+        await update.message.reply_text(
+            _wd_admin_text(r), reply_markup=_wd_admin_kb(r["id"], r["method"] or "manual")
         )
-    await update.message.reply_text("\n".join(lines), reply_markup=back_to_main_kb())
 
 
 async def wapprove(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5527,6 +5938,12 @@ def build_app():
     app.add_handler(CallbackQueryHandler(shop_btn, pattern=r"^shop$"))
     app.add_handler(CallbackQueryHandler(buy_btn, pattern=r"^buy:.+"))
     app.add_handler(CallbackQueryHandler(topup_stars_btn, pattern=r"^topup_stars$"))
+    app.add_handler(CallbackQueryHandler(wd_method_btn, pattern=r"^wd:(cryptobot|trc20|ton)$"))
+    app.add_handler(CallbackQueryHandler(wd_asset_btn, pattern=r"^wd_asset:"))
+    app.add_handler(CallbackQueryHandler(wd_saved_btn, pattern=r"^wd_saved$"))
+    app.add_handler(CallbackQueryHandler(wd_confirm_btn, pattern=r"^wd_confirm$"))
+    app.add_handler(CallbackQueryHandler(wd_admin_btn, pattern=r"^wadm_(pay|paid|rej):\d+$"))
+    app.add_handler(CommandHandler("setfee", cmd_setfee))
     app.add_handler(CallbackQueryHandler(invoice_cancel_btn, pattern=r"^invoice_cancel$"))
     app.add_handler(CallbackQueryHandler(topup_star_amount_btn, pattern=r"^topup_star:\d+$"))
     app.add_handler(CallbackQueryHandler(topup_crypto_btn, pattern=r"^topup_crypto$"))
