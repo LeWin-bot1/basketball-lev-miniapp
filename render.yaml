@@ -2,19 +2,18 @@ services:
   - type: web
     name: basketball-lev-bot
     runtime: python
-    plan: starter
+    plan: free  # для постоянной базы: Starter + Disk (см. ниже)
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
-    disk:
-      name: data
-      mountPath: /var/data
-      sizeGB: 1
+    # На платном тарифе (Starter) раскомментировать и добавить DB_PATH=/var/data/lev_game.db:
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.8"
-      - key: DB_PATH
-        value: /var/data/lev_game.db
       - key: BOT_TOKEN
         sync: false
       - key: PROVIDER_TOKEN

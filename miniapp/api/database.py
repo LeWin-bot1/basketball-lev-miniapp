@@ -19,7 +19,7 @@ DB_PATH = Path(os.getenv("DB_PATH") or (BASE_DIR / "lev_game.db"))  # тот ж�
 @contextmanager
 def get_db():
     """Контекстный менеджер для подключения к БД"""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(os.getenv("DB_PATH") or str(DB_PATH))  # путь выбирает бот (main.py)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

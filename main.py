@@ -182,8 +182,12 @@ async def delete_and_send_new(
 DB_PATH = Path(os.getenv("DB_PATH") or (BASE_DIR / "lev_game.db"))
 try:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not os.access(DB_PATH.parent, os.W_OK):
+        raise PermissionError(DB_PATH.parent)
 except Exception:
-    pass
+    # диска нет (например, бесплатный тариф Render) — работаем с файлом рядом с кодом
+    DB_PATH = BASE_DIR / "lev_game.db"
+os.environ["DB_PATH"] = str(DB_PATH)  # чтобы API Mini App использовал тот же файл
 
 
 def db():
