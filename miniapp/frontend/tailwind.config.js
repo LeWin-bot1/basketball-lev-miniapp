@@ -34,6 +34,25 @@ export default {
           500: '#7c4dff', // Фиолетовый акцент
           600: '#651fff',
         },
+        // Тёмная тема с золотом (Basketball Lev)
+        ink: {
+          950: '#08080a',
+          900: '#0e0e11',
+          850: '#131317',
+          800: '#18181d',
+          700: '#222229',
+          600: '#2e2e37',
+          400: '#8d8a83',
+          300: '#b9b5ab',
+        },
+        gold: {
+          200: '#f8ecc4',
+          300: '#f3dc8e',
+          400: '#e7c35f',
+          500: '#d4a937',
+          600: '#b38a26',
+          700: '#7d5f17',
+        },
       },
       fontFamily: {
         sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],

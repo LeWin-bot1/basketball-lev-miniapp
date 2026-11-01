@@ -7,8 +7,8 @@ import './index.css'
 try {
   WebApp.ready()
   WebApp.expand()
-  WebApp.setHeaderColor('#f9a825')
-  WebApp.setBackgroundColor('#ffffff')
+  WebApp.setHeaderColor('#08080a')
+  WebApp.setBackgroundColor('#08080a')
 } catch (error) {
   console.warn('Telegram WebApp init skipped', error)
 }

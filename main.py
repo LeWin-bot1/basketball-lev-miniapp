@@ -1779,7 +1779,7 @@ def history_btn(kind: str) -> InlineKeyboardButton:
     """
     label = "🧾 История пополнений" if kind == "deposits" else "📜 История выводов"
     if MINIAPP_URL:
-        return InlineKeyboardButton(label, web_app=WebAppInfo(url=f"{MINIAPP_URL}/history?tab={kind}"))
+        return InlineKeyboardButton(label, web_app=WebAppInfo(url=f"{MINIAPP_URL}/wallet?tab={kind}"))
     cb = "lev_purchases_history" if kind == "deposits" else "lev_withdraw_history"
     return InlineKeyboardButton(label, callback_data=cb)
 

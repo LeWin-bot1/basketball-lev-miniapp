@@ -10,6 +10,7 @@ import type {
   FinanceHistory,
   MatchHistory,
 } from '../types';
+import type { Me, Wallet, PublicProfile } from '../types/app';
 
 // Базовый URL API (в production заменить на реальный)
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -127,9 +128,26 @@ export async function getLedgerHistory(
   return fetchApi<FinanceHistory>(`/ledger?${params.toString()}`);
 }
 
+// ==================== Mini App v2 ====================
+
+export async function getMe(): Promise<Me> {
+  return fetchApi<Me>('/me');
+}
+
+export async function getWallet(): Promise<Wallet> {
+  return fetchApi<Wallet>('/wallet');
+}
+
+export async function getPublicProfile(userId: number): Promise<PublicProfile> {
+  return fetchApi<PublicProfile>(`/profile/${userId}`);
+}
+
 // ==================== Export ====================
 
 export const api = {
+  me: getMe,
+  wallet: getWallet,
+  publicProfile: getPublicProfile,
   profile: {
     getMy: getMyProfile,
     getById: getPlayerProfile,

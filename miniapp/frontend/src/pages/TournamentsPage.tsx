@@ -4,8 +4,7 @@ import { Trophy, Clock, Medal, Users, Gift, Wifi, WifiOff, Crown } from 'lucide-
 import { api } from '../api/client';
 import { useTournamentWebSocket } from '../hooks/useWebSocket';
 import type { TournamentLeaderboard, TournamentPlayer } from '../types';
-import LeaderboardRow from '../components/LeaderboardRow';
-import { PageLoader } from '../components/LoadingSpinner';
+import { Loader, haptic } from '../components/ui';
 
 // Моковые данные для разработки
 const mockTournament: TournamentLeaderboard = {
@@ -57,19 +56,19 @@ function useCountdown(target: number | null) {
 
 function TimeBox({ value, label }: { value: number; label: string }) {
   return (
-    <div className="flex-1 bg-white/15 backdrop-blur rounded-xl py-2 text-center">
-      <div className="text-2xl font-extrabold tabular-nums leading-tight">
+    <div className="flex-1 rounded-xl border border-gold-500/20 bg-ink-950/60 py-2 text-center">
+      <div className="gold-text text-2xl font-extrabold tabular-nums leading-tight">
         {String(value).padStart(2, '0')}
       </div>
-      <div className="text-[11px] uppercase tracking-wide opacity-80">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.12em] text-ink-400">{label}</div>
     </div>
   );
 }
 
 const PODIUM = [
-  { place: 2, medal: '🥈', height: 'h-20', ring: 'ring-gray-300', bg: 'from-gray-100 to-gray-200' },
-  { place: 1, medal: '🥇', height: 'h-28', ring: 'ring-yellow-400', bg: 'from-yellow-100 to-amber-200' },
-  { place: 3, medal: '🥉', height: 'h-16', ring: 'ring-orange-300', bg: 'from-orange-100 to-orange-200' },
+  { place: 2, medal: '🥈', height: 'h-20', ring: 'ring-slate-300/60', bg: 'from-slate-400/25 to-slate-400/5' },
+  { place: 1, medal: '🥇', height: 'h-28', ring: 'ring-gold-400', bg: 'from-gold-400/40 to-gold-600/5' },
+  { place: 3, medal: '🥉', height: 'h-16', ring: 'ring-orange-400/60', bg: 'from-orange-500/25 to-orange-500/5' },
 ];
 
 function Podium({
@@ -90,22 +89,22 @@ function Podium({
                 onClick={() => onOpen(p.user_id)}
                 className="flex flex-col items-center w-full min-w-0 mb-2"
               >
-                {place === 1 && <Crown size={20} className="text-yellow-500 mb-1" />}
+                {place === 1 && <Crown size={20} className="text-gold-400 mb-1" />}
                 <div
-                  className={`w-12 h-12 rounded-full bg-white ring-4 ${ring} flex items-center justify-center text-2xl shadow`}
+                  className={`w-12 h-12 rounded-full bg-ink-800 ring-2 ${ring} flex items-center justify-center text-2xl shadow-[0_0_20px_rgba(212,169,55,0.25)]`}
                 >
                   {medal}
                 </div>
-                <div className="mt-1 text-sm font-semibold text-gray-900 truncate w-full text-center">
+                <div className="mt-1 text-sm font-semibold text-[#f4f1ea] truncate w-full text-center">
                   {playerName(p)}
                 </div>
-                <div className="text-xs text-gray-500">{p.wins} побед</div>
+                <div className="text-xs text-ink-400">{p.wins} побед</div>
               </button>
             ) : (
-              <div className="mb-2 text-xs text-gray-300">—</div>
+              <div className="mb-2 text-xs text-ink-600">—</div>
             )}
             <div
-              className={`w-full ${height} rounded-t-xl bg-gradient-to-b ${bg} flex items-start justify-center pt-2 text-lg font-extrabold text-gray-700`}
+              className={`w-full ${height} rounded-t-xl border-x border-t border-white/[0.06] bg-gradient-to-b ${bg} flex items-start justify-center pt-2 text-lg font-extrabold text-[#f4f1ea]`}
             >
               {place}
             </div>
@@ -158,7 +157,7 @@ export default function TournamentsPage() {
 
   const countdown = useCountdown(endTs(data));
 
-  if (loading) return <PageLoader />;
+  if (loading) return <Loader />;
 
   const finished = data?.status === 'finished' || countdown?.done === true;
   const players = data?.players ?? [];
@@ -172,12 +171,12 @@ export default function TournamentsPage() {
     <div className="p-4 page-transition">
       {/* Заголовок */}
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <Trophy className="text-primary-500" />
+        <h1 className="text-[22px] font-bold tracking-tight flex items-center gap-2">
+          <Trophy className="text-gold-400" />
           Турнир
         </h1>
         {!isDev && !finished && (
-          <div className={`flex items-center gap-1 text-xs ${isConnected ? 'text-green-500' : 'text-gray-400'}`}>
+          <div className={`flex items-center gap-1 text-xs ${isConnected ? 'text-emerald-400' : 'text-ink-400'}`}>
             {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
             {isConnected ? 'Live' : 'Offline'}
           </div>
@@ -186,25 +185,21 @@ export default function TournamentsPage() {
 
       {/* Главная карточка: обратный отсчёт или итог */}
       <div
-        className={`rounded-2xl p-4 mb-5 text-white shadow-lg ${
-          finished
-            ? 'bg-gradient-to-br from-gray-700 to-gray-900'
-            : 'bg-gradient-to-br from-primary-500 via-primary-600 to-accent-500'
-        }`}
+        className={`card-gold p-4 mb-5 ${finished ? 'opacity-95' : ''}`}
       >
         {finished ? (
           <>
-            <div className="flex items-center gap-2 text-sm opacity-90">
-              <Trophy size={16} /> Турнир завершён{endDate ? ` · ${endDate}` : ''}
+            <div className="flex items-center gap-2 text-sm text-ink-300">
+              <Trophy size={16} className="text-gold-400" /> Турнир завершён{endDate ? ` · ${endDate}` : ''}
             </div>
-            <div className="mt-2 text-xl font-extrabold">
+            <div className="mt-2 text-xl font-extrabold gold-text">
               {top[0] ? `Победитель — ${playerName(top[0])} 🎉` : 'Победитель не определён'}
             </div>
           </>
         ) : (
           <>
-            <div className="flex items-center gap-2 text-sm opacity-90 mb-3">
-              <Clock size={16} /> До конца турнира
+            <div className="flex items-center gap-2 text-sm text-ink-300 mb-3">
+              <Clock size={16} className="text-gold-400" /> До конца турнира
             </div>
             {countdown && (
               <div className="flex gap-2">
@@ -214,17 +209,17 @@ export default function TournamentsPage() {
                 <TimeBox value={countdown.seconds} label="секунд" />
               </div>
             )}
-            {endDate && <div className="mt-3 text-xs opacity-80">Финиш: {endDate}</div>}
+            {endDate && <div className="mt-3 text-xs text-ink-400">Финиш: {endDate}</div>}
           </>
         )}
 
         <div className="mt-4 flex gap-2 text-sm">
-          <div className="flex-1 flex items-center gap-2 bg-white/15 rounded-xl px-3 py-2">
-            <Gift size={16} />
+          <div className="flex-1 flex items-center gap-2 rounded-xl border border-white/[0.06] bg-ink-950/60 px-3 py-2">
+            <Gift size={16} className="text-gold-400" />
             <span className="truncate">{data?.prize || 'майка Prada'}</span>
           </div>
-          <div className="flex items-center gap-2 bg-white/15 rounded-xl px-3 py-2">
-            <Users size={16} />
+          <div className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-ink-950/60 px-3 py-2">
+            <Users size={16} className="text-gold-400" />
             {data?.total_participants ?? 0}
           </div>
         </div>
@@ -232,8 +227,8 @@ export default function TournamentsPage() {
 
       {/* Пьедестал */}
       {top.length > 0 && (
-        <div className="bg-white rounded-2xl p-4 mb-5 border border-gray-100">
-          <div className="text-sm font-semibold text-gray-500 mb-3">
+        <div className="card p-4 mb-5">
+          <div className="label mb-3">
             {finished ? '🏆 Победители' : '🔥 Лидеры сейчас'}
           </div>
           <Podium top={top} onOpen={openPlayer} />
@@ -242,33 +237,39 @@ export default function TournamentsPage() {
 
       {/* Твоя позиция */}
       {data?.current_user_rank && (
-        <div className="bg-yellow-50 rounded-xl p-4 mb-4 border border-yellow-200 flex items-center gap-2">
-          <Medal className="text-yellow-600" size={20} />
-          <span className="text-sm text-yellow-700">
+        <div className="card mb-4 flex items-center gap-2 border-gold-500/25 p-4">
+          <Medal className="text-gold-400" size={20} />
+          <span className="text-sm text-ink-300">
             {finished ? 'Твоё итоговое место:' : 'Твоя позиция:'}
           </span>
-          <span className="font-bold text-yellow-800">#{data.current_user_rank}</span>
+          <span className="font-bold text-gold-300">#{data.current_user_rank}</span>
         </div>
       )}
 
       {/* Таблица */}
-      <div className="text-sm font-semibold text-gray-500 mb-2">Таблица</div>
-      <div className="space-y-2">
+      <div className="label mb-2 px-1">Таблица</div>
+      <div className="card divide-y divide-white/[0.05]">
         {players.length ? (
           players.map((p, i) => (
-            <LeaderboardRow
+            <button
               key={p.user_id}
-              rank={i + 1}
-              name={playerName(p)}
-              username={p.username}
-              wins={p.wins}
-              losses={p.losses}
-              points={p.points}
-              onClick={() => openPlayer(p.user_id)}
-            />
+              onClick={() => { haptic(); openPlayer(p.user_id); }}
+              className={`flex w-full items-center gap-3 px-4 py-3 text-left ${
+                data?.current_user_rank === i + 1 ? 'bg-gold-500/[0.07]' : ''
+              }`}
+            >
+              <div className="w-7 text-center text-sm font-bold">
+                {i < 3 ? ['🥇', '🥈', '🥉'][i] : <span className="text-ink-400">{i + 1}</span>}
+              </div>
+              <div className="min-w-0 flex-1 truncate text-sm font-semibold">{playerName(p)}</div>
+              <div className="text-right">
+                <div className="tabular text-sm font-bold text-gold-300">{p.points}</div>
+                <div className="text-[10px] text-ink-400">{p.wins} побед</div>
+              </div>
+            </button>
           ))
         ) : (
-          <div className="text-center py-10 text-gray-400 text-sm">
+          <div className="text-center py-10 text-ink-400 text-sm">
             {finished
               ? 'Таблица турнира очищена — смотри победителей выше.'
               : 'Пока никто не сыграл. Побеждай в матчах на Lev, чтобы попасть в таблицу!'}
@@ -276,7 +277,7 @@ export default function TournamentsPage() {
         )}
       </div>
 
-      <p className="mt-4 text-center text-xs text-gray-400">
+      <p className="mt-4 text-center text-xs text-ink-400">
         Победа в матче на Lev = 3 очка. Места — по числу побед.
       </p>
     </div>

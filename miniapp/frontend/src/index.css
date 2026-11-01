@@ -2,15 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Глобальные стили для Telegram Mini App */
+/* Basketball Lev — тёмная тема с золотом */
 :root {
-  --tg-theme-bg-color: #ffffff;
-  --tg-theme-text-color: #000000;
-  --tg-theme-hint-color: #999999;
-  --tg-theme-link-color: #2481cc;
-  --tg-theme-button-color: #2481cc;
-  --tg-theme-button-text-color: #ffffff;
-  --tg-theme-secondary-bg-color: #f0f0f0;
+  color-scheme: dark;
 }
 
 * {
@@ -22,93 +16,68 @@ html, body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
-  background-color: var(--tg-theme-bg-color);
-  color: var(--tg-theme-text-color);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: #08080a;
+  color: #f4f1ea;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background:
+    radial-gradient(1200px 500px at 50% -200px, rgba(212, 169, 55, 0.14), transparent 60%),
+    #08080a;
+  background-attachment: fixed;
 }
 
 #root {
   min-height: 100vh;
 }
 
-/* Плавные переходы между страницами */
 .page-transition {
-  animation: fadeIn 0.3s ease-out;
+  animation: fadeIn 0.25s ease-out;
 }
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-/* Стили для скроллбара */
-::-webkit-scrollbar {
-  width: 4px;
-}
+::-webkit-scrollbar { width: 0; height: 0; }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--tg-theme-hint-color);
-  border-radius: 2px;
-}
-
-/* Кастомные утилиты */
 @layer utilities {
-  .safe-area-bottom {
-    padding-bottom: env(safe-area-inset-bottom);
+  .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
+  .safe-area-top { padding-top: env(safe-area-inset-top); }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-white/[0.06] bg-ink-850;
   }
-  
-  .safe-area-top {
-    padding-top: env(safe-area-inset-top);
+  .card-gold {
+    @apply rounded-2xl border border-gold-500/30;
+    background:
+      linear-gradient(145deg, rgba(212, 169, 55, 0.16), rgba(212, 169, 55, 0.02) 55%),
+      #131317;
   }
-}
-
-/* Карточки */
-.card {
-  @apply bg-white rounded-2xl p-4 shadow-sm border border-gray-100;
-}
-
-.card-dark {
-  background-color: var(--tg-theme-secondary-bg-color);
-}
-
-/* Кнопки */
-.btn {
-  @apply px-4 py-3 rounded-xl font-medium transition-all duration-200 active:scale-95;
-}
-
-.btn-primary {
-  @apply bg-primary-500 text-white hover:bg-primary-600;
-}
-
-.btn-secondary {
-  @apply bg-gray-100 text-gray-800 hover:bg-gray-200;
-}
-
-/* Теги / бейджи */
-.badge {
-  @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
-}
-
-.badge-win {
-  @apply bg-green-100 text-green-800;
-}
-
-.badge-loss {
-  @apply bg-red-100 text-red-800;
-}
-
-.badge-draw {
-  @apply bg-gray-100 text-gray-800;
+  .gold-text {
+    background: linear-gradient(180deg, #f8ecc4 0%, #e7c35f 45%, #b38a26 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-400;
+  }
+  .btn-gold {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-ink-950 transition active:scale-[0.98];
+    background: linear-gradient(180deg, #f3dc8e, #d4a937);
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-semibold text-ink-300 transition active:scale-[0.98];
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold;
+  }
 }
