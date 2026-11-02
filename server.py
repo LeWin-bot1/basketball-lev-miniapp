@@ -64,12 +64,22 @@ app.router.lifespan_context = lifespan
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-@app.get("/")
-async def spa_index():
+# index.html никогда не кешируем — иначе Telegram показывает старую версию Mini App
+# (особенно через нижнюю кнопку «Mini App»). Файлы в assets/ с хешем в имени — навсегда.
+NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
+def _index_response():
     index = FRONTEND_DIR / "index.html"
     if index.is_file():
-        return FileResponse(index)
+        return FileResponse(index, headers=NO_CACHE)
     return {"status": "ok", "message": "Mini App frontend is not built"}
+
+
+@app.get("/")
+async def spa_index():
+    return _index_response()
 
 
 @app.get("/{full_path:path}")
@@ -78,13 +88,11 @@ async def spa_fallback(full_path: str):
         return {"detail": "Not found"}
 
     candidate = FRONTEND_DIR / full_path
-    if candidate.is_file():
-        return FileResponse(candidate)
+    if candidate.is_file() and candidate.name != "index.html":
+        headers = IMMUTABLE if full_path.startswith("assets/") else None
+        return FileResponse(candidate, headers=headers)
 
-    index = FRONTEND_DIR / "index.html"
-    if index.is_file():
-        return FileResponse(index)
-    return {"detail": "Not found"}
+    return _index_response()
 
 
 if __name__ == "__main__":

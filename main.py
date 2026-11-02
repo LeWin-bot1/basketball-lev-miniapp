@@ -4310,15 +4310,21 @@ def menu_kb() -> InlineKeyboardMarkup:
 
 
 async def start_deeplink(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/start: показать меню, убрать старое меню и само сообщение «/start»."""
-    try:
-        await drop_user_inputs(context.bot, update.effective_chat.id)
-        return await _start_deeplink_impl(update, context)
-    finally:
+    """
+    /start: показать меню и убрать старое меню и ПРЕДЫДУЩЕЕ «/start».
+    Последнее «/start» оставляем: если в чате не останется ни одного сообщения игрока,
+    Telegram вместо клавиатуры показывает большую кнопку «Старт».
+    """
+    chat_id = update.effective_chat.id
+    await drop_user_inputs(context.bot, chat_id)
+    prev = get_config(f"last_start_msg:{chat_id}")
+    if prev and prev.isdigit() and int(prev) != update.message.message_id:
         try:
-            await update.message.delete()
+            await context.bot.delete_message(chat_id, int(prev))
         except Exception:
             pass
+    set_config(f"last_start_msg:{chat_id}", str(update.message.message_id))
+    return await _start_deeplink_impl(update, context)
 
 
 async def _start_deeplink_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
