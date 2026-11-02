@@ -126,6 +126,24 @@ async def drop_last_menu(bot, chat_id: int, keep: Optional[int] = None) -> None:
             pass
 
 
+# сообщения, которые игрок написал в ходе операции (сумма, адрес и т.п.):
+# chat_id -> [message_id]. Удаляются, как только игрок уходит в другое меню,
+# отменяет операцию или завершает её — в чате не остаётся «мусора».
+user_input_msgs: Dict[int, List[int]] = {}
+
+
+def remember_user_input(chat_id: int, message_id: int) -> None:
+    user_input_msgs.setdefault(chat_id, []).append(message_id)
+
+
+async def drop_user_inputs(bot, chat_id: int) -> None:
+    for mid in user_input_msgs.pop(chat_id, []):
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
 # неоплаченные счета на пополнение: chat_id -> message_id
 # (убираем их, как только игрок уходит в другое меню или жмёт «Отмена»)
 pending_invoices: Dict[int, int] = {}
@@ -155,6 +173,7 @@ async def delete_and_send_new(
     chat_id = query.message.chat_id
     try:
         await drop_pending_invoice(bot, chat_id)
+        await drop_user_inputs(bot, chat_id)
     except Exception:
         pass
     # предыдущее меню (если нажали кнопку в более старом сообщении)
@@ -1464,6 +1483,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     text = update.message.text.strip()
+    # всё, что игрок пишет в ходе операций, уберём из чата при отмене/завершении
+    remember_user_input(update.effective_chat.id, update.message.message_id)
     # --- оформление вывода Lev (адрес / сумма) ---
     if context.user_data.get("await_wd") in ("address", "amount"):
         return await wd_text_input(update, context, text)
