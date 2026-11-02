@@ -117,8 +117,47 @@ async def send_photo_best_effort(
 last_menu_msg: Dict[int, int] = {}
 
 
-async def drop_last_menu(bot, chat_id: int, keep: Optional[int] = None) -> None:
+def _menu_store(conn=None):
+    conn = conn or db()
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ui_last_menu (chat_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL)"
+    )
+    return conn
+
+
+def set_last_menu(chat_id: int, message_id: int) -> None:
+    """Запомнить текущее меню (в памяти и в базе — чтобы пережить перезапуск бота)."""
+    last_menu_msg[chat_id] = message_id
+    try:
+        conn = _menu_store()
+        conn.execute(
+            "INSERT INTO ui_last_menu(chat_id, message_id) VALUES(?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET message_id=excluded.message_id",
+            (chat_id, message_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _pop_last_menu(chat_id: int) -> Optional[int]:
     mid = last_menu_msg.pop(chat_id, None)
+    try:
+        conn = _menu_store()
+        if mid is None:
+            row = conn.execute("SELECT message_id FROM ui_last_menu WHERE chat_id=?", (chat_id,)).fetchone()
+            mid = row["message_id"] if row else None
+        conn.execute("DELETE FROM ui_last_menu WHERE chat_id=?", (chat_id,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    return mid
+
+
+async def drop_last_menu(bot, chat_id: int, keep: Optional[int] = None) -> None:
+    mid = _pop_last_menu(chat_id)
     if mid and mid != keep:
         try:
             await bot.delete_message(chat_id, mid)
@@ -191,7 +230,7 @@ async def delete_and_send_new(
         reply_markup=reply_markup,
         parse_mode=parse_mode,
     )
-    last_menu_msg[chat_id] = msg.message_id
+    set_last_menu(chat_id, msg.message_id)
     return msg
 
 
@@ -1477,7 +1516,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text="Главное меню:",
             reply_markup=main_menu(u.id),
         )
-        last_menu_msg[chat_id] = msg.message_id
+        set_last_menu(chat_id, msg.message_id)
 
 
 async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2588,7 +2627,7 @@ async def wd_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         msg = await update.message.reply_text(
             t, reply_markup=kb or _cancel_wd_kb(), parse_mode=ParseMode.HTML if html else None
         )
-        last_menu_msg[chat_id] = msg.message_id
+        set_last_menu(chat_id, msg.message_id)
 
     if not wd:
         context.user_data.pop("await_wd", None)
@@ -4271,6 +4310,18 @@ def menu_kb() -> InlineKeyboardMarkup:
 
 
 async def start_deeplink(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/start: показать меню, убрать старое меню и само сообщение «/start»."""
+    try:
+        await drop_user_inputs(context.bot, update.effective_chat.id)
+        return await _start_deeplink_impl(update, context)
+    finally:
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+
+async def _start_deeplink_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /start с параметрами (инвайт в дуэль, инвайт в команду) или обычный старт.
     """
