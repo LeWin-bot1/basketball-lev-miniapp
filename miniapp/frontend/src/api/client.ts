@@ -10,7 +10,7 @@ import type {
   FinanceHistory,
   MatchHistory,
 } from '../types';
-import type { Me, Wallet, PublicProfile } from '../types/app';
+import type { Me, Wallet, PublicProfile, Requisites, RequisitePurpose, RequisiteMethod } from '../types/app';
 
 // Базовый URL API (в production заменить на реальный)
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -142,12 +142,29 @@ export async function getPublicProfile(userId: number): Promise<PublicProfile> {
   return fetchApi<PublicProfile>(`/profile/${userId}`);
 }
 
+export async function getRequisites(): Promise<Requisites> {
+  return fetchApi<Requisites>('/requisites');
+}
+
+export async function saveRequisite(
+  purpose: RequisitePurpose,
+  method: RequisiteMethod,
+  value: string | boolean
+): Promise<Requisites> {
+  return fetchApi<Requisites>('/requisites', {
+    method: 'PUT',
+    body: JSON.stringify({ purpose, method, value }),
+  });
+}
+
 // ==================== Export ====================
 
 export const api = {
   me: getMe,
   wallet: getWallet,
   publicProfile: getPublicProfile,
+  requisites: getRequisites,
+  saveRequisite,
   profile: {
     getMy: getMyProfile,
     getById: getPlayerProfile,

@@ -15,11 +15,15 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Query, WebSocket
+from fastapi import Body, FastAPI, Depends, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import get_current_user, get_user_id_from_init_data, TelegramInitData
 from .database import (
+    WALLET_METHODS,
+    get_all_wallets,
+    save_wallet,
+    valid_wallet,
     get_config_value,
     get_deposits,
     get_lev_stats,
@@ -237,7 +241,7 @@ async def get_me(user: TelegramInitData = Depends(get_current_user)):
             "best_win_streak": best_win_streak,
         },
         "tournament": get_tournament_entry(uid),
-        "requisites": parse_requisites(get_saved_requisites(uid)),
+        "requisites": get_all_wallets(uid),
         "recent_matches": matches,
         "total_matches": total_matches,
     }
@@ -254,10 +258,52 @@ async def get_wallet(user: TelegramInitData = Depends(get_current_user)):
         "pending_withdraw_lev": sum(
             w["lev"] for w in withdrawals if w["status"] in ("pending", "processing")
         ),
-        "requisites": parse_requisites(get_saved_requisites(uid)),
+        "requisites": get_all_wallets(uid),
         "deposits": get_deposits(uid),
         "withdrawals": withdrawals,
     }
+
+
+@app.get("/api/requisites")
+async def get_requisites_api(user: TelegramInitData = Depends(get_current_user)):
+    """Реквизиты игрока для пополнения и для вывода (те же, что видит бот)."""
+    p = _player_or_create(user)
+    return get_all_wallets(p["user_id"])
+
+
+@app.put("/api/requisites")
+async def put_requisites_api(
+    body: dict = Body(...),
+    user: TelegramInitData = Depends(get_current_user),
+):
+    """
+    Сохранить один реквизит: {"purpose": "withdraw"|"deposit", "method": "ton"|"trc20"|"cryptobot",
+    "value": "адрес" | "" (удалить)}. Для cryptobot value = true/false (подключить/отключить).
+    """
+    p = _player_or_create(user)
+    uid = p["user_id"]
+    purpose = str(body.get("purpose", ""))
+    method = str(body.get("method", ""))
+    if purpose not in WALLET_METHODS or method not in WALLET_METHODS[purpose]:
+        raise HTTPException(status_code=400, detail="Неизвестный тип реквизитов")
+    raw = body.get("value")
+    if method == "cryptobot":
+        if raw in (True, "true", "on", 1):
+            who = f"@{p['username']}" if p.get("username") else "без username"
+            value = f"tg_id {uid} ({who})"
+        else:
+            value = None
+    else:
+        value = str(raw or "").strip() or None
+        if value and not valid_wallet(method, value):
+            msg = (
+                "Адрес USDT TRC20 должен начинаться с T и состоять из 34 символов"
+                if method == "trc20"
+                else "Адрес TON должен начинаться с UQ или EQ и состоять из 48 символов"
+            )
+            raise HTTPException(status_code=400, detail=msg)
+    save_wallet(uid, purpose, method, value)
+    return get_all_wallets(uid)
 
 
 @app.get("/api/profile/{user_id}")

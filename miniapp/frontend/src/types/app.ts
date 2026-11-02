@@ -1,11 +1,14 @@
 // Типы новых экранов Mini App (/api/me, /api/wallet, /api/profile/:id)
 import type { MatchResult } from './index';
 
+/** Реквизиты игрока: для пополнения (с каких кошельков платит) и для вывода. */
 export interface Requisites {
-  type: 'cryptobot' | 'trc20' | 'ton';
-  label: string;
-  value: string;
+  deposit: { ton: string | null; trc20: string | null };
+  withdraw: { ton: string | null; trc20: string | null; cryptobot: string | null };
 }
+
+export type RequisitePurpose = 'deposit' | 'withdraw';
+export type RequisiteMethod = 'ton' | 'trc20' | 'cryptobot';
 
 export interface MeStats {
   matches: number;
@@ -35,7 +38,7 @@ export interface Me {
   balance: number;
   stats: MeStats;
   tournament: MeTournament | null;
-  requisites: Requisites | null;
+  requisites: Requisites;
   recent_matches: MatchResult[];
   total_matches: number;
 }
@@ -67,7 +70,7 @@ export interface Withdrawal {
 export interface Wallet {
   balance: number;
   pending_withdraw_lev: number;
-  requisites: Requisites | null;
+  requisites: Requisites;
   deposits: Deposit[];
   withdrawals: Withdrawal[];
 }

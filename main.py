@@ -366,6 +366,7 @@ def init_db():
             cur.execute(sql)
         except sqlite3.OperationalError:
             pass
+    ensure_wallets_table(conn)  # реквизиты для пополнения/вывода (+ перенос старых)
     conn.commit()
     conn.close()
 
@@ -708,6 +709,108 @@ def is_crypto_requisites(text: Optional[str]) -> bool:
     return bool(text) and text.startswith(CRYPTO_REQ_PREFIXES)
 
 
+# -------- Реквизиты игрока: для пополнения и для вывода --------
+# Хранятся в таблице player_wallets (её же читает и меняет Mini App).
+# purpose: "deposit" (кошельки, с которых игрок платит) | "withdraw" (куда выводить)
+# method:  "ton" | "trc20" | "cryptobot" (cryptobot — только для вывода)
+WALLET_METHODS = {
+    "deposit": ("ton", "trc20"),
+    "withdraw": ("ton", "trc20", "cryptobot"),
+}
+METHOD_PREFIX = {m: REQ_TYPES[m][1] for m in REQ_TYPES}  # ton -> "TON", trc20 -> "USDT-TRC20", ...
+
+
+def ensure_wallets_table(conn=None) -> None:
+    own = conn is None
+    conn = conn or db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_wallets (
+          user_id INTEGER NOT NULL,
+          purpose TEXT NOT NULL,
+          method TEXT NOT NULL,
+          value TEXT NOT NULL,
+          updated_at INTEGER DEFAULT (strftime('%s','now')),
+          PRIMARY KEY (user_id, purpose, method)
+        )
+        """
+    )
+    # перенос старых реквизитов (одно поле saved_requisites) в новую таблицу
+    rows = conn.execute(
+        "SELECT user_id, saved_requisites FROM players WHERE saved_requisites IS NOT NULL"
+    ).fetchall()
+    for r in rows:
+        saved = r["saved_requisites"] or ""
+        for m, pref in METHOD_PREFIX.items():
+            if saved.startswith(pref + ":"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO player_wallets(user_id,purpose,method,value) VALUES(?,?,?,?)",
+                    (r["user_id"], "withdraw", m, saved[len(pref) + 1:].strip()),
+                )
+    if own:
+        conn.commit()
+        conn.close()
+
+
+def get_wallets(uid: int, purpose: str = "withdraw") -> Dict[str, str]:
+    """Реквизиты игрока: {"ton": "UQ…", "trc20": "T…", "cryptobot": "tg_id …"}."""
+    conn = db()
+    try:
+        rows = conn.execute(
+            "SELECT method, value FROM player_wallets WHERE user_id=? AND purpose=?",
+            (uid, purpose),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    conn.close()
+    order = WALLET_METHODS.get(purpose, ())
+    found = {r["method"]: r["value"] for r in rows}
+    return {m: found[m] for m in order if m in found}
+
+
+def _sync_saved_requisites(conn, uid: int) -> None:
+    """Старое поле saved_requisites = первый реквизит для вывода (для совместимости)."""
+    rows = conn.execute(
+        "SELECT method, value FROM player_wallets WHERE user_id=? AND purpose='withdraw'", (uid,)
+    ).fetchall()
+    found = {r["method"]: r["value"] for r in rows}
+    for m in ("cryptobot", "trc20", "ton"):
+        if m in found:
+            conn.execute(
+                "UPDATE players SET saved_requisites=? WHERE user_id=?",
+                (f"{METHOD_PREFIX[m]}: {found[m]}", uid),
+            )
+            return
+    conn.execute("UPDATE players SET saved_requisites=NULL WHERE user_id=?", (uid,))
+
+
+def set_wallet(uid: int, purpose: str, method: str, value: Optional[str]) -> None:
+    """Сохранить (или удалить, если value пустое) реквизит."""
+    conn = db()
+    ensure_wallets_table(conn)
+    if value:
+        conn.execute(
+            "INSERT INTO player_wallets(user_id,purpose,method,value,updated_at) "
+            "VALUES(?,?,?,?,strftime('%s','now')) "
+            "ON CONFLICT(user_id,purpose,method) DO UPDATE SET value=excluded.value, "
+            "updated_at=excluded.updated_at",
+            (uid, purpose, method, value.strip()),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM player_wallets WHERE user_id=? AND purpose=? AND method=?",
+            (uid, purpose, method),
+        )
+    _sync_saved_requisites(conn, uid)
+    conn.commit()
+    conn.close()
+
+
+def cryptobot_value(u) -> str:
+    who = f"@{u.username}" if getattr(u, "username", None) else "без username"
+    return f"tg_id {u.id} ({who})"
+
+
 def get_requisites(uid: int) -> Optional[str]:
     """Сохранённые крипто-реквизиты игрока (старые СБП/КАРТА не считаются)."""
     conn = db()
@@ -721,12 +824,22 @@ def get_requisites(uid: int) -> Optional[str]:
 
 
 def has_requisites(uid: int) -> bool:
-    """Проверить, сохранил ли игрок крипто-реквизиты для вывода."""
-    return get_requisites(uid) is not None
+    """Есть ли у игрока хотя бы один реквизит для вывода."""
+    return bool(get_wallets(uid, "withdraw")) or get_requisites(uid) is not None
+
+
+def requisites_webapp_btn(tab: str = "withdraw", label: str = "🔐 Реквизиты") -> Optional[InlineKeyboardButton]:
+    if not MINIAPP_URL:
+        return None
+    return InlineKeyboardButton(label, web_app=WebAppInfo(url=f"{MINIAPP_URL}/requisites?tab={tab}"))
 
 
 def requisites_type_kb(cancel_cb: str = "menu") -> InlineKeyboardMarkup:
-    rows = [
+    rows = []
+    wa = requisites_webapp_btn("withdraw", "🔐 Указать реквизиты в Mini App")
+    if wa:
+        rows.append([wa])
+    rows += [
         [InlineKeyboardButton(lbl, callback_data=f"req_type:{t}")]
         for t, (lbl, _pref) in REQ_TYPES.items()
     ]
@@ -879,6 +992,7 @@ def main_menu(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton("💸 Пополнить", callback_data="shop"),
             InlineKeyboardButton("🏦 Вывести", callback_data="withdraw_menu"),
         ],
+        [requisites_webapp_btn("withdraw") or InlineKeyboardButton("🔐 Реквизиты", callback_data="requisites_menu")],
     ])
     # старые выигранные звёзды (долг бота) — кнопка видна, только пока есть что выводить
     if get_stars_pending(uid) > 0:
@@ -1486,12 +1600,7 @@ async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ),
             )
         value = f"{REQ_TYPES[req_type][1]}: {addr}"
-        conn = db()
-        conn.execute(
-            "UPDATE players SET saved_requisites=? WHERE user_id=?", (value, u.id)
-        )
-        conn.commit()
-        conn.close()
+        set_wallet(u.id, "withdraw", req_type, addr)
         context.user_data.pop("await_requisites", None)
         return await update.message.reply_text(
             f"✅ Реквизиты сохранены:\n{value}",
@@ -2316,6 +2425,7 @@ def lev_to_crypto(lev: int, asset: str) -> str:
 def withdraw_menu_kb() -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(lbl, callback_data=f"wd:{m}")] for m, lbl in WD_METHODS.items()]
     rows.append([history_btn("withdrawals")])
+    rows.append([requisites_webapp_btn("withdraw") or InlineKeyboardButton("🔐 Реквизиты", callback_data="requisites_menu")])
     rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -2384,6 +2494,8 @@ async def wd_method_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 q, "Вывод в CryptoBot временно недоступен.", reply_markup=_cancel_wd_kb()
             )
         context.user_data["wd"] = {"method": "cryptobot"}
+        if "cryptobot" not in get_wallets(q.from_user.id, "withdraw"):
+            set_wallet(q.from_user.id, "withdraw", "cryptobot", cryptobot_value(q.from_user))
         kb = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("💵 USDT", callback_data="wd_asset:USDT"),
@@ -2403,11 +2515,9 @@ async def wd_method_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["wd"] = {"method": method, "asset": asset}
     context.user_data["await_wd"] = "address"
 
-    prefix = REQ_TYPES[method][1] + ": "
-    saved = get_requisites(q.from_user.id)
+    addr = get_wallets(q.from_user.id, "withdraw").get(method)
     rows = []
-    if saved and saved.startswith(prefix):
-        addr = saved[len(prefix):]
+    if addr:
         context.user_data["wd"]["saved_address"] = addr
         rows.append([InlineKeyboardButton(f"✅ На сохранённый: {addr[:6]}…{addr[-4:]}", callback_data="wd_saved")])
     rows.append([InlineKeyboardButton("↩️ Назад", callback_data="withdraw_menu")])
@@ -2468,14 +2578,7 @@ async def wd_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         if not valid_crypto_address(wd.get("method", ""), addr):
             return await reply("❌ Похоже, адрес неверный. Проверь сеть и отправь адрес ещё раз:")
         wd["address"] = addr
-        # запоминаем как реквизиты
-        conn = db()
-        conn.execute(
-            "UPDATE players SET saved_requisites=? WHERE user_id=?",
-            (f"{REQ_TYPES[wd['method']][1]}: {addr}", u.id),
-        )
-        conn.commit()
-        conn.close()
+        set_wallet(u.id, "withdraw", wd["method"], addr)  # запоминаем как реквизиты (видно и в Mini App)
         context.user_data["await_wd"] = "amount"
         return await reply(_wd_amount_prompt(wd, get_lev(u.id)), html=True)
 
@@ -2864,10 +2967,22 @@ async def requisites_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     push_menu(context, "requisites_menu")
 
-    saved = get_requisites(q.from_user.id)
+    uid = q.from_user.id
+    names = {"ton": "TON", "trc20": "USDT TRC20", "cryptobot": "@CryptoBot"}
+
+    def block(purpose: str) -> str:
+        w = get_wallets(uid, purpose)
+        lines = [
+            f"• {names[m]}: " + (f"<code>{w[m]}</code>" if m in w else "—")
+            for m in WALLET_METHODS[purpose]
+        ]
+        return "\n".join(lines)
+
     text = (
-        "✏️ Сохранённые реквизиты: " + (f"<code>{saved}</code>" if saved else "не заданы")
-        + "\n\n" + WITHDRAW_NOTE + "\n\nВыбери, куда выводить:"
+        "🔐 <b>Реквизиты</b>\n\n"
+        f"<b>Для вывода</b> (куда отправим выигрыш):\n{block('withdraw')}\n\n"
+        f"<b>Для пополнения</b> (кошельки, с которых ты платишь):\n{block('deposit')}\n\n"
+        "Изменить удобнее всего в Mini App. Или выбери ниже, куда выводить:"
     )
     await delete_and_send_new(q, text, reply_markup=requisites_type_kb(), parse_mode=ParseMode.HTML)
 
@@ -2891,12 +3006,7 @@ async def req_type_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if req_type == "cryptobot":
-        who = f"@{u.username}" if u.username else "без username"
-        value = f"CRYPTOBOT: tg_id {u.id} ({who})"
-        conn = db()
-        conn.execute("UPDATE players SET saved_requisites=? WHERE user_id=?", (value, u.id))
-        conn.commit()
-        conn.close()
+        set_wallet(u.id, "withdraw", "cryptobot", cryptobot_value(u))
         context.user_data.pop("await_requisites", None)
         return await delete_and_send_new(
             q,

@@ -668,3 +668,83 @@ def get_saved_requisites(user_id: int) -> Optional[str]:
             return row["saved_requisites"] if row else None
     except sqlite3.OperationalError:
         return None
+
+
+# -------------------- Реквизиты (общие с ботом: таблица player_wallets) --------------------
+import re as _re
+
+WALLET_METHODS = {"deposit": ("ton", "trc20"), "withdraw": ("ton", "trc20", "cryptobot")}
+_PREFIX = {"ton": "TON", "trc20": "USDT-TRC20", "cryptobot": "CRYPTOBOT"}
+_TRC20 = _re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+_TON_FRIENDLY = _re.compile(r"^(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}$")
+_TON_RAW = _re.compile(r"^-?\d+:[0-9a-fA-F]{64}$")
+
+
+def valid_wallet(method: str, value: str) -> bool:
+    value = value.strip()
+    if method == "trc20":
+        return bool(_TRC20.match(value))
+    if method == "ton":
+        return bool(_TON_FRIENDLY.match(value) or _TON_RAW.match(value))
+    return False
+
+
+def _ensure_wallets(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_wallets (
+          user_id INTEGER NOT NULL,
+          purpose TEXT NOT NULL,
+          method TEXT NOT NULL,
+          value TEXT NOT NULL,
+          updated_at INTEGER DEFAULT (strftime('%s','now')),
+          PRIMARY KEY (user_id, purpose, method)
+        )
+        """
+    )
+
+
+def get_all_wallets(user_id: int) -> dict:
+    """{"deposit": {"ton": ..., "trc20": ...}, "withdraw": {"ton":..., "trc20":..., "cryptobot":...}}"""
+    with get_db() as conn:
+        _ensure_wallets(conn)
+        rows = conn.execute(
+            "SELECT purpose, method, value FROM player_wallets WHERE user_id=?", (user_id,)
+        ).fetchall()
+    out = {p: {m: None for m in ms} for p, ms in WALLET_METHODS.items()}
+    for r in rows:
+        if r["purpose"] in out and r["method"] in out[r["purpose"]]:
+            out[r["purpose"]][r["method"]] = r["value"]
+    return out
+
+
+def save_wallet(user_id: int, purpose: str, method: str, value: Optional[str]) -> None:
+    """Сохранить/удалить реквизит и обновить старое поле saved_requisites (его читает бот)."""
+    with get_db() as conn:
+        _ensure_wallets(conn)
+        if value:
+            conn.execute(
+                "INSERT INTO player_wallets(user_id,purpose,method,value,updated_at) "
+                "VALUES(?,?,?,?,strftime('%s','now')) "
+                "ON CONFLICT(user_id,purpose,method) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (user_id, purpose, method, value.strip()),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM player_wallets WHERE user_id=? AND purpose=? AND method=?",
+                (user_id, purpose, method),
+            )
+        found = {
+            r["method"]: r["value"]
+            for r in conn.execute(
+                "SELECT method, value FROM player_wallets WHERE user_id=? AND purpose='withdraw'",
+                (user_id,),
+            ).fetchall()
+        }
+        primary = next((m for m in ("cryptobot", "trc20", "ton") if m in found), None)
+        conn.execute(
+            "UPDATE players SET saved_requisites=? WHERE user_id=?",
+            (f"{_PREFIX[primary]}: {found[primary]}" if primary else None, user_id),
+        )
+        conn.commit()

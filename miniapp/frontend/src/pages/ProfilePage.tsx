@@ -4,7 +4,7 @@ import { User, Copy, Check, Trophy, ChevronRight, Flame, Wallet as WalletIcon } 
 import { api } from '../api/client';
 import type { Me } from '../types/app';
 import { useLoad } from '../hooks/useLoad';
-import { Chip, Empty, ErrorBox, Loader, PageTitle, Section, backToBot, fmtDate, fmtLev, haptic } from '../components/ui';
+import { Chip, Empty, ErrorBox, Loader, PageTitle, Section, fmtDate, fmtLev, haptic } from '../components/ui';
 
 const mockMe: Me = {
   user_id: 1,
@@ -17,7 +17,10 @@ const mockMe: Me = {
     win_streak: 3, best_win_streak: 5,
   },
   tournament: { rank: 4, wins: 15, losses: 9, points: 45, total: 87 },
-  requisites: { type: 'cryptobot', label: 'Аккаунт @CryptoBot', value: 'tg_id 1350766902 (@Nikita_Kovalevsk)' },
+  requisites: {
+    deposit: { ton: null, trc20: null },
+    withdraw: { ton: null, trc20: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', cryptobot: 'tg_id 1350766902 (@Nikita_Kovalevsk)' },
+  },
   recent_matches: [
     { match_id: '1', opponent_name: 'Alex', opponent_id: 2, player_score: 3, opponent_score: 2, result: 'win', delta_lev: 50, played_at: Date.now() / 1000 - 3600 },
     { match_id: '2', opponent_name: 'Max', opponent_id: 3, player_score: 1, opponent_score: 2, result: 'loss', delta_lev: -25, played_at: Date.now() / 1000 - 86400 },
@@ -43,19 +46,18 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 export default function ProfilePage() {
   const navigate = useNavigate();
   const { data: me, error, loading, reload } = useLoad(api.me, mockMe);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   if (loading) return <Loader />;
   if (error || !me) return <div className="p-4"><ErrorBox message={error || ''} onRetry={reload} /></div>;
 
   const s = me.stats;
-  const copy = async () => {
-    if (!me.requisites) return;
+  const copy = async (value: string) => {
     try {
-      await navigator.clipboard.writeText(me.requisites.value);
-      setCopied(true);
+      await navigator.clipboard.writeText(value);
+      setCopied(value);
       haptic();
-      setTimeout(() => setCopied(false), 1500);
+      setTimeout(() => setCopied(null), 1500);
     } catch {
       /* буфер недоступен */
     }
@@ -160,24 +162,34 @@ export default function ProfilePage() {
       </Section>
 
       {/* Реквизиты */}
-      <Section title="Реквизиты для вывода">
-        <div className="card px-4 py-3">
-          {me.requisites ? (
-            <>
-              <div className="text-xs text-ink-400">{me.requisites.label}</div>
-              <div className="mt-1 flex items-center gap-2">
-                <code className="min-w-0 flex-1 break-all font-mono text-[13px] text-[#f4f1ea]">{me.requisites.value}</code>
-                <button onClick={copy} className="shrink-0 rounded-lg p-2 text-gold-400 active:bg-white/5" aria-label="Скопировать">
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                </button>
+      <Section
+        title="Реквизиты для вывода"
+        right={<button onClick={() => navigate('/requisites?tab=withdraw')} className="text-xs font-semibold text-gold-400">Изменить →</button>}
+      >
+        <div className="card divide-y divide-white/[0.05]">
+          {(
+            [
+              ['ton', '💎', 'TON'],
+              ['trc20', '💵', 'USDT TRC20'],
+              ['cryptobot', '🤖', 'CryptoBot'],
+            ] as const
+          ).map(([key, icon, name]) => {
+            const v = me.requisites.withdraw[key];
+            return (
+              <div key={key} className="flex items-center gap-3 px-4 py-3">
+                <span className="text-base">{icon}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-ink-400">{name}</div>
+                  <div className={`truncate font-mono text-[12px] ${v ? 'text-[#f4f1ea]' : 'text-ink-600'}`}>{v || 'не указан'}</div>
+                </div>
+                {v && (
+                  <button onClick={() => copy(v)} className="shrink-0 rounded-lg p-2 text-gold-400 active:bg-white/5" aria-label="Скопировать">
+                    {copied === v ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
+                )}
               </div>
-            </>
-          ) : (
-            <div className="text-sm text-ink-300">Реквизиты не указаны</div>
-          )}
-          <button onClick={backToBot} className="mt-3 text-xs font-semibold text-gold-400">
-            Изменить в боте →
-          </button>
+            );
+          })}
         </div>
       </Section>
 

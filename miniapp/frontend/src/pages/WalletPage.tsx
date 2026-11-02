@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet as WalletIcon, ArrowDownLeft, ArrowUpRight, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
 import type { Deposit, Wallet, Withdrawal } from '../types/app';
@@ -12,7 +12,10 @@ const now = Date.now() / 1000;
 const mockWallet: Wallet = {
   balance: 955,
   pending_withdraw_lev: 200,
-  requisites: { type: 'trc20', label: 'USDT · TRC20 (Tron)', value: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' },
+  requisites: {
+    deposit: { ton: null, trc20: null },
+    withdraw: { ton: null, trc20: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', cryptobot: null },
+  },
   deposits: [
     { id: 'p2', method: 'usdt', amount: '5 USDT', lev: 500, status: 'paid', details: 'CryptoBot · счёт #777', created_at: now - 3600 },
     { id: 'i3', method: 'ton', amount: '0.5 TON', lev: 150, status: 'active', details: 'CryptoBot · счёт #778', created_at: now - 600 },
@@ -117,6 +120,7 @@ function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 }
 
 export default function WalletPage() {
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const tab: Tab = params.get('tab') === 'withdrawals' ? 'withdrawals' : 'deposits';
   const { data: w, error, loading, reload } = useLoad(api.wallet, mockWallet);
@@ -199,11 +203,13 @@ export default function WalletPage() {
           <Empty emoji="🏦" text="Выводов пока нет. Вывести Lev в крипту можно в боте." />
         ))}
 
-      {w.requisites && (
-        <div className="mt-5 px-1 text-[11px] text-ink-400">
-          Реквизиты для вывода: {w.requisites.label} · <span className="font-mono">{shortAddr(w.requisites.value)}</span>
-        </div>
-      )}
+      <button
+        onClick={() => navigate(`/requisites?tab=${tab === 'withdrawals' ? 'withdraw' : 'deposit'}`)}
+        className="card mt-5 flex w-full items-center justify-between px-4 py-3 text-left"
+      >
+        <span className="text-sm">🔐 Реквизиты для {tab === 'withdrawals' ? 'вывода' : 'пополнения'}</span>
+        <span className="text-xs font-semibold text-gold-400">Открыть →</span>
+      </button>
     </div>
   );
 }
