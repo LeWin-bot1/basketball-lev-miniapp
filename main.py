@@ -1953,11 +1953,19 @@ def history_btn(kind: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(label, callback_data=cb)
 
 
+def crypto_webapp_btn(tab: str, label: str) -> Optional[InlineKeyboardButton]:
+    """Кнопка, открывающая вкладку «Крипта» в Mini App (пополнение/вывод)."""
+    if not MINIAPP_URL:
+        return None
+    return InlineKeyboardButton(label, web_app=WebAppInfo(url=f"{MINIAPP_URL}/crypto?tab={tab}"))
+
+
 def topup_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("⭐ Пополнить звёздами", callback_data="topup_stars")],
-            [InlineKeyboardButton("🪙 Пополнить криптой (USDT / TON)", callback_data="topup_crypto")],
+            [crypto_webapp_btn("deposit", "🪙 Пополнить криптой (USDT / TON)")
+             or InlineKeyboardButton("🪙 Пополнить криптой (USDT / TON)", callback_data="topup_crypto")],
             [history_btn("deposits")],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
         ]
@@ -2204,6 +2212,151 @@ async def check_crypto_invoices(bot, invoice_ids: List[int]) -> None:
 
 
 _crypto_watcher_task: Optional[asyncio.Task] = None
+APP = None  # запущенное приложение бота (ставит server.py), нужно API Mini App
+
+CRYPTO_DEPOSIT_MIN = {"USDT": 0.1, "TON": 0.05}
+CRYPTO_DEPOSIT_MAX = 10000.0
+
+
+async def create_crypto_deposit(uid: int, asset: str, amount: float) -> dict:
+    """Создать счёт CryptoBot на пополнение (используют и бот, и Mini App)."""
+    if not CRYPTO_PAY_TOKEN:
+        raise ValueError("Пополнение криптой пока не подключено")
+    if asset not in CRYPTO_TOPUP_OPTIONS:
+        raise ValueError("Неизвестная монета")
+    if amount < CRYPTO_DEPOSIT_MIN[asset] or amount > CRYPTO_DEPOSIT_MAX:
+        raise ValueError(f"Сумма: от {CRYPTO_DEPOSIT_MIN[asset]:g} до {CRYPTO_DEPOSIT_MAX:g} {asset}")
+    amt = f"{amount:.6f}".rstrip("0").rstrip(".")
+    lev = lev_for(asset.lower(), float(amt))
+    if lev <= 0:
+        raise ValueError("Слишком маленькая сумма")
+    ensure_crypto_tables()
+    inv = await crypto_pay_call(
+        "createInvoice",
+        {
+            "asset": asset,
+            "amount": amt,
+            "description": f"Пополнение {lev} Lev в Basketball Lev",
+            "payload": f"lev:{uid}:{lev}",
+            "expires_in": CRYPTO_INVOICE_TTL,
+            "allow_comments": False,
+        },
+    )
+    inv_id = int(inv["invoice_id"])
+    pay_url = inv.get("bot_invoice_url") or inv.get("pay_url")
+    conn = db()
+    conn.execute(
+        "INSERT INTO crypto_invoices(invoice_id,user_id,asset,amount,lev,status,pay_url) "
+        "VALUES(?,?,?,?,?,'active',?)",
+        (inv_id, uid, asset, amt, lev, pay_url),
+    )
+    conn.commit()
+    conn.close()
+    if APP is not None:
+        ensure_crypto_watcher(APP)
+    return {
+        "invoice_id": inv_id,
+        "asset": asset,
+        "amount": amt,
+        "lev": lev,
+        "status": "active",
+        "pay_url": pay_url,
+        "mini_app_url": inv.get("mini_app_invoice_url"),
+        "expires_in": CRYPTO_INVOICE_TTL,
+    }
+
+
+async def crypto_deposit_status(uid: int, inv_id: int) -> dict:
+    """Статус счёта игрока; если ещё не оплачен — спросить CryptoBot (и зачислить)."""
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM crypto_invoices WHERE invoice_id=? AND user_id=?", (inv_id, uid)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise ValueError("Счёт не найден")
+    if row["status"] == "active" and APP is not None:
+        try:
+            await check_crypto_invoices(APP.bot, [inv_id])
+        except Exception as e:
+            logging.warning("check invoice %s failed: %s", inv_id, e)
+        conn = db()
+        row = conn.execute("SELECT * FROM crypto_invoices WHERE invoice_id=?", (inv_id,)).fetchone()
+        conn.close()
+    return {
+        "invoice_id": inv_id,
+        "asset": row["asset"],
+        "amount": row["amount"],
+        "lev": row["lev"],
+        "status": row["status"],
+        "pay_url": row["pay_url"],
+        "balance": get_lev(uid),
+    }
+
+
+async def create_withdrawal(u, method: str, lev_amt: int, asset: Optional[str] = None,
+                            address: Optional[str] = None) -> dict:
+    """
+    Создать заявку на вывод (используют и бот, и Mini App).
+    u — объект с полями id и username.
+    """
+    if method not in WD_METHODS:
+        raise ValueError("Неизвестный способ вывода")
+    if method == "cryptobot":
+        if not CRYPTO_PAY_TOKEN:
+            raise ValueError("Вывод в CryptoBot временно недоступен")
+        if asset not in WD_DECIMALS:
+            raise ValueError("Выбери монету: USDT или TON")
+        dest = f"CRYPTOBOT tg_id {u.id}"
+        if "cryptobot" not in get_wallets(u.id, "withdraw"):
+            set_wallet(u.id, "withdraw", "cryptobot", cryptobot_value(u))
+    else:
+        asset = "USDT" if method == "trc20" else "TON"
+        address = (address or get_wallets(u.id, "withdraw").get(method) or "").strip()
+        if not valid_crypto_address(method, address):
+            raise ValueError(
+                "Укажи правильный адрес USDT TRC20 (начинается с T, 34 символа)"
+                if method == "trc20"
+                else "Укажи правильный адрес TON (начинается с UQ или EQ, 48 символов)"
+            )
+        set_wallet(u.id, "withdraw", method, address)
+        dest = address
+    if lev_amt < WITHDRAW_MIN:
+        raise ValueError(f"Минимальная сумма вывода: {WITHDRAW_MIN} Lev")
+    amount = lev_to_crypto(lev_amt, asset)
+    if float(amount) <= 0:
+        raise ValueError("Слишком маленькая сумма для вывода")
+    if not sub_lev_safe(u.id, lev_amt):
+        raise ValueError(f"Недостаточно Lev. Баланс: {get_lev(u.id)} Lev")
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO withdraw_requests(user_id,lev,external_address,status,method,asset,crypto_amount) "
+        "VALUES(?,?,?,'pending',?,?,?)",
+        (u.id, lev_amt, dest, method, asset, amount),
+    )
+    wid = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM withdraw_requests WHERE id=?", (wid,)).fetchone()
+    pos = conn.execute(
+        "SELECT COUNT(*) AS c FROM withdraw_requests WHERE status IN ('pending','processing') AND id<=?",
+        (wid,),
+    ).fetchone()["c"]
+    conn.close()
+    if ADMIN_ID and APP is not None:
+        try:
+            await APP.bot.send_message(ADMIN_ID, _wd_admin_text(row), reply_markup=_wd_admin_kb(wid, method))
+        except Exception:
+            pass
+    return {
+        "id": wid,
+        "lev": lev_amt,
+        "asset": asset,
+        "amount": amount,
+        "method": method,
+        "destination": "@CryptoBot" if method == "cryptobot" else dest,
+        "queue_position": pos,
+        "balance": get_lev(u.id),
+    }
 
 
 async def crypto_watcher_loop(application) -> None:
@@ -2483,7 +2636,13 @@ def lev_to_crypto(lev: int, asset: str) -> str:
 
 
 def withdraw_menu_kb() -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(lbl, callback_data=f"wd:{m}")] for m, lbl in WD_METHODS.items()]
+    wa = crypto_webapp_btn("withdraw", "🪙 Вывести криптой (USDT / TON)")
+    if wa:
+        # вывод оформляется во вкладке «Крипта» Mini App
+        rows = [[wa]]
+    else:
+        # без Mini App (например, запуск на Mac без MINIAPP_URL) — вывод прямо в чате
+        rows = [[InlineKeyboardButton(lbl, callback_data=f"wd:{m}")] for m, lbl in WD_METHODS.items()]
     rows.append([history_btn("withdrawals")])
     rows.append([requisites_webapp_btn("withdraw") or InlineKeyboardButton("🔐 Реквизиты", callback_data="requisites_menu")])
     rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu")])
@@ -2503,7 +2662,8 @@ async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Курс вывода:\n• {get_rate('usdt'):g} Lev = 1 USDT\n• {get_rate('ton'):g} Lev = 1 TON\n"
         f"Минимум: {WITHDRAW_MIN} Lev"
         + (f" · комиссия {fee:g}%" if fee else "")
-        + "\n\nВыбери, куда вывести:"
+        + ("\n\nВывод криптой — в Mini App: CryptoBot, USDT TRC20 или TON-кошелёк." if MINIAPP_URL
+           else "\n\nВыбери, куда вывести:")
     )
     await delete_and_send_new(q, text, reply_markup=withdraw_menu_kb(), parse_mode=ParseMode.HTML)
 

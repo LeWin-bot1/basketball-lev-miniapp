@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 
 from miniapp.api.main import app
 from miniapp.api.websocket import periodic_tournament_update
+import main as bot_module
 from main import build_app, init_db, post_init
 
 FRONTEND_DIR = Path(__file__).parent / "miniapp" / "frontend" / "dist"
@@ -32,6 +33,7 @@ async def lifespan(_app):
     init_db()
 
     bot = build_app()
+    bot_module.APP = bot  # API Mini App (вкладка «Крипта») шлёт через него уведомления
     await bot.initialize()
     # то, что run_polling делает сам: кнопка Mini App + проверка неоплаченных крипто-счетов
     try:

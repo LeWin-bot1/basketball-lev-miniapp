@@ -80,3 +80,47 @@ export interface PublicProfile {
   nick: string;
   matches: number;
 }
+
+// -------- Вкладка «Крипта» --------
+export type CryptoAsset = 'USDT' | 'TON';
+export type WithdrawMethod = 'cryptobot' | 'trc20' | 'ton';
+
+export interface CryptoConfig {
+  enabled: boolean;
+  network: string;
+  balance: number;
+  rates: Record<CryptoAsset, number>;
+  deposit: {
+    assets: CryptoAsset[];
+    presets: Record<CryptoAsset, string[]>;
+    min: Record<CryptoAsset, number>;
+    max: number;
+  };
+  withdraw: {
+    min_lev: number;
+    fee_pct: number;
+    decimals: Record<CryptoAsset, number>;
+    saved: { ton: string | null; trc20: string | null; cryptobot: string | null };
+  };
+}
+
+export interface CryptoInvoice {
+  invoice_id: number;
+  asset: CryptoAsset;
+  amount: string;
+  lev: number;
+  status: 'active' | 'paid' | 'expired' | string;
+  pay_url: string | null;
+  balance?: number;
+}
+
+export interface WithdrawResult {
+  id: number;
+  lev: number;
+  asset: CryptoAsset;
+  amount: string;
+  method: WithdrawMethod;
+  destination: string;
+  queue_position: number;
+  balance: number;
+}

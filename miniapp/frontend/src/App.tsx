@@ -6,6 +6,7 @@ import TournamentsPage from './pages/TournamentsPage';
 import WalletPage from './pages/WalletPage';
 import PlayerViewPage from './pages/PlayerViewPage';
 import RequisitesPage from './pages/RequisitesPage';
+import CryptoPage from './pages/CryptoPage';
 
 /** Старые ссылки бота (/history?tab=...) ведут в кошелёк с той же вкладкой. */
 function HistoryRedirect() {
@@ -33,6 +34,7 @@ function App() {
           <Route index element={<Navigate to="/profile" replace />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="tournaments" element={<TournamentsPage />} />
+          <Route path="crypto" element={<CryptoPage />} />
           <Route path="wallet" element={<WalletPage />} />
           <Route path="requisites" element={<RequisitesPage />} />
           <Route path="player/:userId" element={<PlayerViewPage />} />

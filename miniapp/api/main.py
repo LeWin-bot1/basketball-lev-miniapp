@@ -306,6 +306,96 @@ async def put_requisites_api(
     return get_all_wallets(uid)
 
 
+# -------------------- Крипта: пополнение и вывод из Mini App --------------------
+
+def _bot():
+    """Модуль бота (main.py). В Render оба работают в одном процессе (server.py)."""
+    try:
+        import main as bot_main  # noqa: WPS433
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=503, detail="Сервис оплаты недоступен") from exc
+    return bot_main
+
+
+@app.get("/api/crypto/config")
+async def crypto_config(user: TelegramInitData = Depends(get_current_user)):
+    """Курсы, лимиты, баланс и сохранённые адреса — всё для вкладки «Крипта»."""
+    b = _bot()
+    p = _player_or_create(user)
+    uid = p["user_id"]
+    return {
+        "enabled": bool(b.CRYPTO_PAY_TOKEN),
+        "network": b.CRYPTO_PAY_NETWORK,
+        "balance": b.get_lev(uid),
+        "rates": {"USDT": b.get_rate("usdt"), "TON": b.get_rate("ton")},
+        "deposit": {
+            "assets": ["USDT", "TON"],
+            "presets": b.CRYPTO_TOPUP_OPTIONS,
+            "min": b.CRYPTO_DEPOSIT_MIN,
+            "max": b.CRYPTO_DEPOSIT_MAX,
+        },
+        "withdraw": {
+            "min_lev": b.WITHDRAW_MIN,
+            "fee_pct": b.withdraw_fee_pct(),
+            "decimals": b.WD_DECIMALS,
+            "saved": get_all_wallets(uid)["withdraw"],
+        },
+    }
+
+
+@app.post("/api/crypto/deposit")
+async def crypto_deposit(body: dict = Body(...), user: TelegramInitData = Depends(get_current_user)):
+    """Создать счёт CryptoBot: {"asset": "USDT"|"TON", "amount": 5}."""
+    b = _bot()
+    p = _player_or_create(user)
+    try:
+        amount = float(str(body.get("amount", "")).replace(",", "."))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Введите сумму числом")
+    try:
+        return await b.create_crypto_deposit(p["user_id"], str(body.get("asset", "")), amount)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="CryptoBot не ответил, попробуйте ещё раз") from exc
+
+
+@app.get("/api/crypto/deposit/{invoice_id}")
+async def crypto_deposit_status(invoice_id: int, user: TelegramInitData = Depends(get_current_user)):
+    """Статус счёта: active (ждём оплату) / paid (Lev зачислены) / expired."""
+    b = _bot()
+    p = _player_or_create(user)
+    try:
+        return await b.crypto_deposit_status(p["user_id"], invoice_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/crypto/withdraw")
+async def crypto_withdraw(body: dict = Body(...), user: TelegramInitData = Depends(get_current_user)):
+    """
+    Заявка на вывод: {"method": "cryptobot"|"trc20"|"ton", "asset": "USDT"|"TON" (для cryptobot),
+    "lev": 500, "address": "..." (для trc20/ton; если пусто — сохранённый)}.
+    """
+    b = _bot()
+    p = _player_or_create(user)
+    try:
+        lev = int(body.get("lev"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Введите сумму Lev целым числом")
+    who = type("U", (), {"id": p["user_id"], "username": p.get("username")})()
+    try:
+        return await b.create_withdrawal(
+            who,
+            str(body.get("method", "")),
+            lev,
+            asset=body.get("asset"),
+            address=body.get("address"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/profile/{user_id}")
 async def get_player_profile(
     user_id: int,

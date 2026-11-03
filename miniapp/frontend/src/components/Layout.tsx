@@ -1,10 +1,11 @@
 import { Outlet, NavLink } from 'react-router-dom';
-import { User, Trophy, Wallet, KeyRound } from 'lucide-react';
+import { User, Trophy, Wallet, KeyRound, Coins } from 'lucide-react';
 import { haptic } from './ui';
 
 const navItems = [
   { path: '/tournaments', icon: Trophy, label: 'Турнир' },
   { path: '/profile', icon: User, label: 'Профиль' },
+  { path: '/crypto', icon: Coins, label: 'Крипта' },
   { path: '/wallet', icon: Wallet, label: 'Кошелёк' },
   { path: '/requisites', icon: KeyRound, label: 'Реквизиты' },
 ];

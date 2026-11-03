@@ -4,7 +4,7 @@ import { Wallet as WalletIcon, ArrowDownLeft, ArrowUpRight, RefreshCw } from 'lu
 import { api } from '../api/client';
 import type { Deposit, Wallet, Withdrawal } from '../types/app';
 import { useLoad } from '../hooks/useLoad';
-import { Chip, Empty, ErrorBox, Loader, PageTitle, backToBot, fmtDate, fmtLev, haptic } from '../components/ui';
+import { Chip, Empty, ErrorBox, Loader, PageTitle, fmtDate, fmtLev, haptic } from '../components/ui';
 
 type Tab = 'deposits' | 'withdrawals';
 
@@ -160,14 +160,14 @@ export default function WalletPage() {
           </div>
         )}
         <div className="mt-4 grid grid-cols-2 gap-2">
-          <button onClick={backToBot} className="btn-gold">
+          <button onClick={() => navigate('/crypto?tab=deposit')} className="btn-gold">
             <ArrowDownLeft size={16} /> Пополнить
           </button>
-          <button onClick={backToBot} className="btn-ghost">
+          <button onClick={() => navigate('/crypto?tab=withdraw')} className="btn-ghost">
             <ArrowUpRight size={16} /> Вывести
           </button>
         </div>
-        <p className="mt-2 text-center text-[11px] text-ink-400">Пополнение и вывод — в чате с ботом</p>
+        <p className="mt-2 text-center text-[11px] text-ink-400">Криптой — здесь, во вкладке «Крипта». Звёздами — в чате с ботом.</p>
       </div>
 
       {/* Вкладки */}

@@ -10,7 +10,10 @@ import type {
   FinanceHistory,
   MatchHistory,
 } from '../types';
-import type { Me, Wallet, PublicProfile, Requisites, RequisitePurpose, RequisiteMethod } from '../types/app';
+import type {
+  Me, Wallet, PublicProfile, Requisites, RequisitePurpose, RequisiteMethod,
+  CryptoConfig, CryptoInvoice, CryptoAsset, WithdrawMethod, WithdrawResult,
+} from '../types/app';
 
 // Базовый URL API (в production заменить на реальный)
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -157,6 +160,15 @@ export async function saveRequisite(
   });
 }
 
+export const cryptoApi = {
+  config: () => fetchApi<CryptoConfig>('/crypto/config'),
+  deposit: (asset: CryptoAsset, amount: string) =>
+    fetchApi<CryptoInvoice>('/crypto/deposit', { method: 'POST', body: JSON.stringify({ asset, amount }) }),
+  depositStatus: (id: number) => fetchApi<CryptoInvoice>(`/crypto/deposit/${id}`),
+  withdraw: (body: { method: WithdrawMethod; lev: number; asset?: CryptoAsset; address?: string }) =>
+    fetchApi<WithdrawResult>('/crypto/withdraw', { method: 'POST', body: JSON.stringify(body) }),
+};
+
 // ==================== Export ====================
 
 export const api = {
@@ -165,6 +177,7 @@ export const api = {
   publicProfile: getPublicProfile,
   requisites: getRequisites,
   saveRequisite,
+  crypto: cryptoApi,
   profile: {
     getMy: getMyProfile,
     getById: getPlayerProfile,
