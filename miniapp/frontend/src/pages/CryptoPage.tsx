@@ -354,7 +354,7 @@ export default function CryptoPage() {
     <div className="page-transition p-4">
       <PageTitle
         icon={<Coins size={22} />}
-        title="Крипта"
+        title="Пополнение / вывод через криптовалюту"
         right={data.network !== 'mainnet' ? <Chip tone="info">тестовая сеть</Chip> : undefined}
       />
 

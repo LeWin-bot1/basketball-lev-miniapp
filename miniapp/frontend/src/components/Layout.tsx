@@ -5,7 +5,7 @@ import { haptic } from './ui';
 const navItems = [
   { path: '/tournaments', icon: Trophy, label: 'Турнир' },
   { path: '/profile', icon: User, label: 'Профиль' },
-  { path: '/crypto', icon: Coins, label: 'Крипта' },
+  { path: '/crypto', icon: Coins, label: 'Пополнение / вывод' },
   { path: '/wallet', icon: Wallet, label: 'Кошелёк' },
   { path: '/requisites', icon: KeyRound, label: 'Реквизиты' },
 ];
@@ -33,7 +33,7 @@ export default function Layout() {
               {({ isActive }) => (
                 <>
                   <Icon size={22} strokeWidth={isActive ? 2.4 : 1.9} />
-                  <span className="mt-1 text-[10px] font-semibold tracking-wide">{label}</span>
+                  <span className="mt-1 max-w-[72px] text-center text-[10px] font-semibold leading-[1.1] tracking-wide">{label}</span>
                 </>
               )}
             </NavLink>

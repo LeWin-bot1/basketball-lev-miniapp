@@ -167,7 +167,7 @@ export default function WalletPage() {
             <ArrowUpRight size={16} /> Вывести
           </button>
         </div>
-        <p className="mt-2 text-center text-[11px] text-ink-400">Криптой — здесь, во вкладке «Крипта». Звёздами — в чате с ботом.</p>
+        <p className="mt-2 text-center text-[11px] text-ink-400">Криптой — во вкладке «Пополнение / вывод». Звёздами — в чате с ботом.</p>
       </div>
 
       {/* Вкладки */}

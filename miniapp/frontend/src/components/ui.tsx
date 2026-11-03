@@ -20,8 +20,8 @@ export function fmtLev(n: number, sign = false): string {
 
 export function PageTitle({ icon, title, right }: { icon: ReactNode; title: string; right?: ReactNode }) {
   return (
-    <div className="mb-4 flex items-center justify-between">
-      <h1 className="flex items-center gap-2 text-[22px] font-bold tracking-tight text-[#f4f1ea]">
+    <div className="mb-4 flex items-center justify-between gap-2">
+      <h1 className="flex items-center gap-2 text-[22px] font-bold leading-tight tracking-tight text-[#f4f1ea]">
         <span className="text-gold-400">{icon}</span>
         {title}
       </h1>

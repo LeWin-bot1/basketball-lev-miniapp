@@ -2662,7 +2662,7 @@ async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Курс вывода:\n• {get_rate('usdt'):g} Lev = 1 USDT\n• {get_rate('ton'):g} Lev = 1 TON\n"
         f"Минимум: {WITHDRAW_MIN} Lev"
         + (f" · комиссия {fee:g}%" if fee else "")
-        + ("\n\nВывод криптой — в Mini App: CryptoBot, USDT TRC20 или TON-кошелёк." if MINIAPP_URL
+        + ("\n\nВывод — в Mini App, раздел «Пополнение / вывод через криптовалюту»: CryptoBot, USDT TRC20 или TON-кошелёк." if MINIAPP_URL
            else "\n\nВыбери, куда вывести:")
     )
     await delete_and_send_new(q, text, reply_markup=withdraw_menu_kb(), parse_mode=ParseMode.HTML)
