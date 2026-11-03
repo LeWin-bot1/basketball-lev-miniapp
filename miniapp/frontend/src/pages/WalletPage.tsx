@@ -29,7 +29,7 @@ const mockWallet: Wallet = {
 };
 
 const METHOD_ICON: Record<string, string> = { stars: '⭐', usdt: '💵', ton: '💎', rub: '💳', cryptobot: '🤖', trc20: '💵' };
-const WD_METHOD: Record<string, string> = { cryptobot: 'CryptoBot', trc20: 'USDT · TRC20', ton: 'Кошелёк TON' };
+const WD_METHOD: Record<string, string> = { cryptobot: 'CryptoBot', trc20: 'USDT · TRC20', ton: 'Кошелёк TON', stars: 'Звёзды' };
 
 function depositStatus(d: Deposit) {
   if (d.status === 'paid') return <Chip tone="ok">Зачислено</Chip>;

@@ -1525,7 +1525,7 @@ async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # всё, что игрок пишет в ходе операций, уберём из чата при отмене/завершении
     remember_user_input(update.effective_chat.id, update.message.message_id)
     # --- оформление вывода Lev (адрес / сумма) ---
-    if context.user_data.get("await_wd") in ("address", "amount"):
+    if context.user_data.get("await_wd") in ("address", "amount", "stars_amount"):
         return await wd_text_input(update, context, text)
     # --- пользователь вводит количество Stars для вывода (кнопка "Вывести Stars") ---
     if context.user_data.get("await_stars_withdraw"):
@@ -1867,8 +1867,11 @@ async def friend_stars_soon(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------------------- ПОПОЛНЕНИЕ LEV: ЗВЁЗДЫ + КРИПТА --------------------
 # Курсы хранятся в таблице config и меняются админом: /setrate star 10
 # ⚠️ Значения по умолчанию — ТЕСТОВЫЕ.
-DEFAULT_RATES = {"star": 10.0, "usdt": 100.0, "ton": 300.0}   # сколько Lev за 1 ⭐ / 1 USDT / 1 TON
-RATE_LABELS = {"star": "1 ⭐", "usdt": "1 USDT", "ton": "1 TON"}
+DEFAULT_RATES = {"star": 10.0, "usdt": 100.0, "ton": 300.0,   # сколько Lev за 1 ⭐ / 1 USDT / 1 TON
+                 "star_out": 10.0}                             # сколько Lev списать за 1 ⭐ при ВЫВОДЕ
+RATE_LABELS = {"star": "1 ⭐", "usdt": "1 USDT", "ton": "1 TON", "star_out": "1 ⭐ (вывод)"}
+STARS_WITHDRAW_FRAGMENT_MIN = 50          # Fragment продаёт звёзды от 50 штук
+STARS_WITHDRAW_PRESETS = [50, 100, 250, 500]
 STAR_TOPUP_OPTIONS = [1, 5, 25, 100]
 CRYPTO_TOPUP_OPTIONS = {
     "USDT": ["0.1", "1", "5", "10"],
@@ -1964,7 +1967,7 @@ def topup_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("⭐ Пополнить звёздами", callback_data="topup_stars")],
-            [crypto_webapp_btn("deposit", "🪙 Пополнить криптой (USDT / TON)")
+            [crypto_webapp_btn("deposit", "🪙 Пополнить криптой (USDT / TON) — Mini App")
              or InlineKeyboardButton("🪙 Пополнить криптой (USDT / TON)", callback_data="topup_crypto")],
             [history_btn("deposits")],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
@@ -2613,7 +2616,8 @@ WD_METHODS = {
     "trc20": "💵 Вывести USDT (TRC20) на сторонний кошелёк",
     "ton": "💎 Вывести TON на сторонний кошелёк",
 }
-WD_METHOD_SHORT = {"cryptobot": "CryptoBot", "trc20": "USDT TRC20", "ton": "TON-кошелёк"}
+WD_METHOD_SHORT = {"cryptobot": "CryptoBot", "trc20": "USDT TRC20", "ton": "TON-кошелёк",
+                   "stars": "Звёзды (Fragment)"}
 WD_DECIMALS = {"USDT": 2, "TON": 3}
 
 
@@ -2636,13 +2640,14 @@ def lev_to_crypto(lev: int, asset: str) -> str:
 
 
 def withdraw_menu_kb() -> InlineKeyboardMarkup:
-    wa = crypto_webapp_btn("withdraw", "🪙 Вывести криптой (USDT / TON)")
+    wa = crypto_webapp_btn("withdraw", "🪙 Вывести криптой (USDT / TON) — Mini App")
     if wa:
-        # вывод оформляется во вкладке «Крипта» Mini App
+        # крипта оформляется во вкладке «Пополнение / вывод» Mini App
         rows = [[wa]]
     else:
-        # без Mini App (например, запуск на Mac без MINIAPP_URL) — вывод прямо в чате
+        # без Mini App (например, запуск на Mac без MINIAPP_URL) — крипта прямо в чате
         rows = [[InlineKeyboardButton(lbl, callback_data=f"wd:{m}")] for m, lbl in WD_METHODS.items()]
+    rows.append([InlineKeyboardButton("⭐ Вывести звёздами", callback_data="wd_stars")])
     rows.append([history_btn("withdrawals")])
     rows.append([requisites_webapp_btn("withdraw") or InlineKeyboardButton("🔐 Реквизиты", callback_data="requisites_menu")])
     rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu")])
@@ -2660,10 +2665,10 @@ async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"🏦 <b>Вывод Lev</b>\n💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n"
         f"Курс вывода:\n• {get_rate('usdt'):g} Lev = 1 USDT\n• {get_rate('ton'):g} Lev = 1 TON\n"
-        f"Минимум: {WITHDRAW_MIN} Lev"
+        f"• {get_rate('star_out'):g} Lev = 1 ⭐ (от {STARS_WITHDRAW_FRAGMENT_MIN} ⭐)\n"
+        f"Минимум криптой: {WITHDRAW_MIN} Lev"
         + (f" · комиссия {fee:g}%" if fee else "")
-        + ("\n\nВывод — в Mini App, раздел «Пополнение / вывод через криптовалюту»: CryptoBot, USDT TRC20 или TON-кошелёк." if MINIAPP_URL
-           else "\n\nВыбери, куда вывести:")
+        + "\n\nВыбери, как вывести:\n🪙 криптой — в Mini App\n⭐ звёздами — здесь, в чате"
     )
     await delete_and_send_new(q, text, reply_markup=withdraw_menu_kb(), parse_mode=ParseMode.HTML)
 
@@ -2793,6 +2798,17 @@ async def wd_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         context.user_data.pop("await_wd", None)
         return await reply("Выбери способ вывода:", kb=withdraw_menu_kb())
 
+    if stage == "stars_amount":
+        try:
+            stars = int(text.replace(" ", "").replace("⭐", ""))
+        except ValueError:
+            return await reply("Напиши количество звёзд числом, например 100.")
+
+        async def send(t, kb):
+            await reply(t, kb=kb, html=True)
+
+        return await _wd_stars_confirm(send, context, u.id, stars)
+
     if stage == "address":
         addr = text.strip()
         if not valid_crypto_address(wd.get("method", ""), addr):
@@ -2847,7 +2863,10 @@ def _wd_admin_kb(wid: int, method: str) -> InlineKeyboardMarkup:
     first = (
         InlineKeyboardButton("🤖 Отправить через CryptoBot", callback_data=f"wadm_pay:{wid}")
         if method == "cryptobot"
-        else InlineKeyboardButton("✅ Выплачено (отправил вручную)", callback_data=f"wadm_paid:{wid}")
+        else InlineKeyboardButton(
+            "✅ Выплачено (купил ⭐ на Fragment)" if method == "stars" else "✅ Выплачено (отправил вручную)",
+            callback_data=f"wadm_paid:{wid}",
+        )
     )
     return InlineKeyboardMarkup(
         [[first], [InlineKeyboardButton("❌ Отклонить и вернуть Lev", callback_data=f"wadm_rej:{wid}")]]
@@ -2856,7 +2875,12 @@ def _wd_admin_kb(wid: int, method: str) -> InlineKeyboardMarkup:
 
 def _wd_admin_text(r) -> str:
     method = r["method"] or "old"
-    dest = f"@CryptoBot → tg_id {r['user_id']}" if method == "cryptobot" else (r["external_address"] or "—")
+    if method == "cryptobot":
+        dest = f"@CryptoBot → tg_id {r['user_id']}"
+    elif method == "stars":
+        dest = f"{r['external_address']} — купить на fragment.com → Buy Stars"
+    else:
+        dest = r["external_address"] or "—"
     return (
         f"💸 Заявка на вывод #{r['id']}\n"
         f"Игрок: {display_name(r['user_id'])} (id={r['user_id']})\n"
@@ -2881,7 +2905,10 @@ async def wd_confirm_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await delete_and_send_new(
             q, f"Недостаточно Lev. Баланс: {get_lev(u.id)} Lev.", reply_markup=withdraw_menu_kb()
         )
-    address = wd.get("address") or f"CRYPTOBOT tg_id {u.id}"
+    if wd["method"] == "stars":
+        address = f"@{u.username}" if u.username else f"tg_id {u.id}"
+    else:
+        address = wd.get("address") or f"CRYPTOBOT tg_id {u.id}"
     conn = db()
     cur = conn.execute(
         "INSERT INTO withdraw_requests(user_id,lev,external_address,status,method,asset,crypto_amount) "
@@ -3035,6 +3062,79 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp.unlink()
     except Exception:
         pass
+
+
+# ---------- ВЫВОД ЗВЁЗДАМИ (в чате, выплата админом через Fragment) ----------
+async def wd_stars_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    u = q.from_user
+    context.user_data.pop("await_wd", None)
+    if not u.username:
+        return await delete_and_send_new(
+            q,
+            "⭐ Звёзды отправляются по твоему @username, а его у тебя нет.\n\n"
+            "Задай username: Telegram → Настройки → Имя пользователя, и возвращайся.",
+            reply_markup=_cancel_wd_kb(),
+        )
+    rate = get_rate("star_out")
+    bal = get_lev(u.id)
+    max_stars = int(bal // rate) if rate > 0 else 0
+    context.user_data["wd"] = {"method": "stars"}
+    context.user_data["await_wd"] = "stars_amount"
+    kb = [
+        [InlineKeyboardButton(f"{n} ⭐ = {int(n * rate)} Lev", callback_data=f"wd_stars_n:{n}")]
+        for n in STARS_WITHDRAW_PRESETS
+        if n <= max_stars
+    ]
+    kb.append([InlineKeyboardButton("↩️ Назад", callback_data="withdraw_menu")])
+    await delete_and_send_new(
+        q,
+        "⭐ <b>Вывод звёздами</b>\n"
+        f"Звёзды придут на <b>@{u.username}</b> как подарок от Telegram.\n\n"
+        f"Курс: {rate:g} Lev = 1 ⭐ · минимум {STARS_WITHDRAW_FRAGMENT_MIN} ⭐\n"
+        f"Баланс: {bal} Lev (≈ {max_stars} ⭐)\n\n"
+        "Выбери количество или напиши число ⭐:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+
+
+async def _wd_stars_confirm(send, context, uid: int, stars: int):
+    """Показать подтверждение вывода звёзд (send — функция отправки меню)."""
+    rate = get_rate("star_out")
+    lev = int(stars * rate + 0.999999)
+    if stars < STARS_WITHDRAW_FRAGMENT_MIN:
+        return await send(f"Минимум {STARS_WITHDRAW_FRAGMENT_MIN} ⭐. Напиши число побольше:", _cancel_wd_kb())
+    if lev > get_lev(uid):
+        return await send(f"Недостаточно Lev: нужно {lev}, на балансе {get_lev(uid)}. Напиши число поменьше:", _cancel_wd_kb())
+    context.user_data["wd"] = {"method": "stars", "asset": "⭐", "amount": str(stars), "lev": lev}
+    context.user_data["await_wd"] = None
+    kb = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("✅ Подтвердить вывод", callback_data="wd_confirm")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="withdraw_menu")],
+        ]
+    )
+    await send(
+        "Проверь заявку:\n\n"
+        f"Списать: <b>{lev} Lev</b>\n"
+        f"Получишь: <b>{stars} ⭐</b>\n\n"
+        "Lev спишутся сразу, звёзды придут после обработки админом. "
+        "Если заявку отклонят, Lev вернутся.",
+        kb,
+    )
+
+
+async def wd_stars_n_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    stars = int(q.data.split(":")[1])
+
+    async def send(text, kb):
+        await delete_and_send_new(q, text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+    await _wd_stars_confirm(send, context, q.from_user.id, stars)
 
 
 async def cmd_setfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -6324,6 +6424,8 @@ def build_app():
     app.add_handler(CallbackQueryHandler(wd_asset_btn, pattern=r"^wd_asset:"))
     app.add_handler(CallbackQueryHandler(wd_saved_btn, pattern=r"^wd_saved$"))
     app.add_handler(CallbackQueryHandler(wd_confirm_btn, pattern=r"^wd_confirm$"))
+    app.add_handler(CallbackQueryHandler(wd_stars_btn, pattern=r"^wd_stars$"))
+    app.add_handler(CallbackQueryHandler(wd_stars_n_btn, pattern=r"^wd_stars_n:\d+$"))
     app.add_handler(CallbackQueryHandler(wd_admin_btn, pattern=r"^wadm_(pay|paid|rej):\d+$"))
     app.add_handler(CommandHandler("setfee", cmd_setfee))
     app.add_handler(CommandHandler("backup", cmd_backup))
