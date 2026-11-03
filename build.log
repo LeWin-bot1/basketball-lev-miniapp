@@ -1,0 +1,25 @@
+commit: f24d08d952579bcf0ab1857035c054a4187eabc0
+date: Tue Nov  3 06:28:12 UTC 2026
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated @humanwhocodes/config-array@0.13.0: Use @eslint/config-array instead
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated @humanwhocodes/object-schema@2.0.3: Use @eslint/object-schema instead
+npm warn deprecated eslint@8.57.1: This version is no longer supported. Please see https://eslint.org/version-support for other options.
+npm warn deprecated recharts@2.15.4: 1.x and 2.x branches are no longer active. Bump to Recharts v3 to receive latest features and bugfixes. See https://github.com/recharts/recharts/wiki/3.0-migration-guide
+
+added 292 packages in 2s
+
+> basketball-lev-miniapp@1.0.0 build
+> tsc && vite build
+
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 1484 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                 [39m[1m[2m  0.68 kB[22m[1m[22m[2m │ gzip:  0.43 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-Dmlv1LGv.css  [39m[1m[2m 22.48 kB[22m[1m[22m[2m │ gzip:  5.03 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-D8ljnIQ-.js   [39m[1m[2m264.70 kB[22m[1m[22m[2m │ gzip: 81.15 kB[22m
+[32m✓ built in 1.65s[39m
+result: success
