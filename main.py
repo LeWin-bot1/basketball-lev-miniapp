@@ -1495,8 +1495,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Короткое приветственное сообщение в стиле Virus Game Bot
         welcome_text = (
             "<b>🦁 Добро пожаловать в Basketball Lev!</b>\n\n"
-            "🏀 Один бросок — и ты в игре. Попал — у соперника один шанс ответить. "
-            "Не ответил — <b>победа твоя!</b>\n\n"
+            "🎯 <b>Реальная возможность заработать.</b> Это не казино: здесь нет наших алгоритмов, "
+            "и мы не зарабатываем на ваших играх. Исход каждого броска определяет сам Telegram, "
+            "а кто бросает первым — решает жребий. Шансы в каждой дуэли — <b>50 на 50</b>.\n\n"
             "⚔️ Вызывай друзей или находи соперника за секунды\n"
             "💰 <b>Зарабатывай реальные деньги</b> в каждой дуэли\n"
             "🏆 Участвуй в турнирах и выигрывай <b>эксклюзивные призы</b>\n"
@@ -4368,6 +4369,9 @@ async def stars_mm_timeout(mid: str, key: str, uid: int):
 
 
 async def announce_start(context: ContextTypes.DEFAULT_TYPE, m: Match):
+    # кто бросает первым — случайно (честные 50 на 50 до начала матча)
+    if m.p2 is not None and secrets.randbelow(2):
+        m.p1, m.p2 = m.p2, m.p1
     m.started = True
     m.turn = m.p1
     m.last_turn_change_ts = time.time()
@@ -5665,6 +5669,10 @@ async def rematch_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 p_to, "Недостаточно Lev для реванша.", reply_markup=back_to_main_kb()
             )
             return await q.edit_message_text("Недостаточно Lev.", reply_markup=back_to_main_kb())
+
+    # кто бросает первым — случайно (честные 50 на 50)
+    if secrets.randbelow(2):
+        p_from, p_to = p_to, p_from
 
     mid = secrets.token_hex(6)
     m = Match(
