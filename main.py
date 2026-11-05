@@ -1995,9 +1995,9 @@ def crypto_webapp_btn(tab: str, label: str) -> Optional[InlineKeyboardButton]:
 def topup_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("⭐ Пополнить звёздами", callback_data="topup_stars")],
-            [crypto_webapp_btn("deposit", "🪙 Пополнить криптой (USDT / TON) — Mini App")
-             or InlineKeyboardButton("🪙 Пополнить криптой (USDT / TON)", callback_data="topup_crypto")],
+            [crypto_webapp_btn("deposit", "🪙 Криптой (USDT / TON) — откроется Mini App")
+             or InlineKeyboardButton("🪙 Криптой (USDT / TON)", callback_data="topup_crypto")],
+            [InlineKeyboardButton("⭐ Звёздами — счёт прямо в чате", callback_data="topup_stars")],
             [history_btn("deposits")],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
         ]
@@ -2009,19 +2009,17 @@ async def shop_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    if not has_requisites(q.from_user.id):
-        return await delete_and_send_new(
-            q,
-            need_requisites_text("Перед покупкой Lev нужно указать реквизиты для вывода."),
-            reply_markup=requisites_type_kb(),
-        )
-
+    # для пополнения реквизиты не нужны (адрес спросим при выводе)
     await delete_and_send_new(
         q,
-        f"💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n"
-        "Пополнение Lev — Lev начисляются автоматически сразу после оплаты.\n\n"
+        f"💸 <b>Пополнение Lev</b>\n💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n"
+        "Выбери способ:\n"
+        "🪙 <b>Криптой</b> (USDT / TON) — откроется Mini App\n"
+        "⭐ <b>Звёздами</b> — счёт придёт прямо сюда, в чат\n\n"
+        "Lev начисляются автоматически сразу после оплаты.\n\n"
         f"Курс:\n{rates_text()}",
         reply_markup=topup_menu_kb(),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -2669,14 +2667,14 @@ def lev_to_crypto(lev: int, asset: str) -> str:
 
 
 def withdraw_menu_kb() -> InlineKeyboardMarkup:
-    wa = crypto_webapp_btn("withdraw", "🪙 Вывести криптой (USDT / TON) — Mini App")
+    wa = crypto_webapp_btn("withdraw", "🪙 Криптой (USDT / TON) — откроется Mini App")
     if wa:
         # крипта оформляется во вкладке «Пополнение / вывод» Mini App
         rows = [[wa]]
     else:
         # без Mini App (например, запуск на Mac без MINIAPP_URL) — крипта прямо в чате
         rows = [[InlineKeyboardButton(lbl, callback_data=f"wd:{m}")] for m, lbl in WD_METHODS.items()]
-    rows.append([InlineKeyboardButton("⭐ Вывести звёздами", callback_data="wd_stars")])
+    rows.append([InlineKeyboardButton("⭐ Звёздами — заявка прямо в чате", callback_data="wd_stars")])
     rows.append([history_btn("withdrawals")])
     rows.append([requisites_webapp_btn("withdraw") or InlineKeyboardButton("🔐 Реквизиты", callback_data="requisites_menu")])
     rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu")])
@@ -2697,7 +2695,8 @@ async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• {get_rate('star_out'):g} Lev = 1 ⭐ (от {STARS_WITHDRAW_FRAGMENT_MIN} ⭐)\n"
         f"Минимум криптой: {WITHDRAW_MIN} Lev"
         + (f" · комиссия {fee:g}%" if fee else "")
-        + "\n\nВыбери, как вывести:\n🪙 криптой — в Mini App\n⭐ звёздами — здесь, в чате"
+        + "\n\nВыбери способ:\n🪙 <b>Криптой</b> (USDT / TON) — откроется Mini App\n"
+        "⭐ <b>Звёздами</b> — заявка оформляется прямо здесь, в чате"
     )
     await delete_and_send_new(q, text, reply_markup=withdraw_menu_kb(), parse_mode=ParseMode.HTML)
 
