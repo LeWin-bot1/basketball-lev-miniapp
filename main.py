@@ -925,11 +925,15 @@ def requisites_type_kb(cancel_cb: str = "menu") -> InlineKeyboardMarkup:
     rows = []
     wa = requisites_webapp_btn("withdraw", "🔐 Указать реквизиты в Mini App")
     if wa:
+        # адреса TON / USDT указываются в Mini App, в чате — только быстрый вариант CryptoBot
         rows.append([wa])
-    rows += [
-        [InlineKeyboardButton(lbl, callback_data=f"req_type:{t}")]
-        for t, (lbl, _pref) in REQ_TYPES.items()
-    ]
+        rows.append([InlineKeyboardButton(REQ_TYPES["cryptobot"][0], callback_data="req_type:cryptobot")])
+    else:
+        # без Mini App (запуск на Mac без MINIAPP_URL) — все варианты прямо в чате
+        rows += [
+            [InlineKeyboardButton(lbl, callback_data=f"req_type:{t}")]
+            for t, (lbl, _pref) in REQ_TYPES.items()
+        ]
     rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data=cancel_cb)])
     return InlineKeyboardMarkup(rows)
 
@@ -937,10 +941,8 @@ def requisites_type_kb(cancel_cb: str = "menu") -> InlineKeyboardMarkup:
 def need_requisites_text(reason: str) -> str:
     return (
         f"‼️ {reason}\n\n"
-        "Выигрыш выводится только в криптовалюте. Выбери, куда выводить:\n"
-        "• USDT в сети TRC20 (Tron)\n"
-        "• USDT или TON в сети TON (Telegram Wallet, Tonkeeper)\n"
-        "• на аккаунт @CryptoBot (без адреса)"
+        "Укажи кошелёк TON или USDT TRC20 в Mini App — или просто подключи "
+        "свой аккаунт @CryptoBot (без адреса)."
     )
 
 
@@ -3329,7 +3331,7 @@ async def requisites_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 <b>Реквизиты</b>\n\n"
         f"<b>Для вывода</b> (куда отправим выигрыш):\n{block('withdraw')}\n\n"
         f"<b>Для пополнения</b> (кошельки, с которых ты платишь):\n{block('deposit')}\n\n"
-        "Изменить удобнее всего в Mini App. Или выбери ниже, куда выводить:"
+        "Изменить реквизиты — в Mini App. Или подключи аккаунт @CryptoBot кнопкой ниже:"
     )
     await delete_and_send_new(q, text, reply_markup=requisites_type_kb(), parse_mode=ParseMode.HTML)
 
