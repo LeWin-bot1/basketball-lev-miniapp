@@ -6377,6 +6377,18 @@ async def post_init(application) -> None:
     """
     ensure_crypto_tables()
     ensure_crypto_watcher(application)
+    # Описание бота («Что умеет этот бот?») — из BOT_DESCRIPTION.txt.
+    # Заголовок «Что умеет этот бот?» Telegram добавляет сам, в тексте его быть не должно.
+    try:
+        desc_file = BASE_DIR / "BOT_DESCRIPTION.txt"
+        if desc_file.is_file():
+            desc = desc_file.read_text(encoding="utf-8").strip()[:512]
+            current = await application.bot.get_my_description()
+            if desc and (current.description or "").strip() != desc:
+                await application.bot.set_my_description(description=desc)
+                logging.info("Bot description updated")
+    except Exception as e:
+        logging.warning("Failed to set bot description: %s", e)
     if MINIAPP_URL:
         try:
             await application.bot.set_chat_menu_button(
