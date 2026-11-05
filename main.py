@@ -156,13 +156,31 @@ def _pop_last_menu(chat_id: int) -> Optional[int]:
     return mid
 
 
+async def retire_message(bot, chat_id: int, mid: int) -> None:
+    """
+    Убрать старое меню. Telegram даёт боту удалять сообщения только 48 часов,
+    поэтому если удалить нельзя — убираем кнопки и заменяем текст коротким «⬇️».
+    """
+    try:
+        await bot.delete_message(chat_id, mid)
+        return
+    except Exception:
+        pass
+    try:
+        await bot.edit_message_text(chat_id=chat_id, message_id=mid, text="⬇️")
+        return
+    except Exception:
+        pass
+    try:
+        await bot.edit_message_reply_markup(chat_id=chat_id, message_id=mid, reply_markup=None)
+    except Exception:
+        pass
+
+
 async def drop_last_menu(bot, chat_id: int, keep: Optional[int] = None) -> None:
     mid = _pop_last_menu(chat_id)
     if mid and mid != keep:
-        try:
-            await bot.delete_message(chat_id, mid)
-        except Exception:
-            pass
+        await retire_message(bot, chat_id, mid)
 
 
 # сообщения, которые игрок написал в ходе операции (сумма, адрес и т.п.):
@@ -215,13 +233,24 @@ async def delete_and_send_new(
         await drop_user_inputs(bot, chat_id)
     except Exception:
         pass
+    msg_in = query.message
     # предыдущее меню (если нажали кнопку в более старом сообщении)
-    await drop_last_menu(bot, chat_id, keep=query.message.message_id)
-    try:
-        # Удаляем сообщение, в котором нажали кнопку
-        await query.message.delete()
-    except Exception:
-        pass
+    await drop_last_menu(bot, chat_id, keep=msg_in.message_id)
+
+    # 1) Обычное текстовое меню — просто меняем его на месте (без ограничения 48 часов)
+    if getattr(msg_in, "text", None) and not getattr(msg_in, "invoice", None):
+        try:
+            edited = await msg_in.edit_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+            set_last_menu(chat_id, msg_in.message_id)
+            return edited
+        except Exception as e:
+            if "not modified" in str(e).lower():
+                set_last_menu(chat_id, msg_in.message_id)
+                return msg_in
+            # не получилось (например, слишком длинный текст) — удалим и пришлём новое
+
+    # 2) Фото, счёт и т.п. — убираем старое сообщение (или прячем, если оно старше 48 ч)
+    await retire_message(bot, chat_id, msg_in.message_id)
 
     # Отправляем новое сообщение и запоминаем его как текущее меню
     msg = await bot.send_message(
