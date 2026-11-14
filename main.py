@@ -1979,8 +1979,7 @@ async def rates_menu_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         q,
         "💱 <b>Курс Lev</b>\n\n"
         + rates_text("both")
-        + (f"\n\nКомиссия за вывод: {fee:g}%" if fee else "")
-        + "\n\nПри пополнении и выводе бот сразу показывает, сколько ты получишь.",
+        + (f"\n\nКомиссия за вывод: {fee:g}%" if fee else ""),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(
             [
