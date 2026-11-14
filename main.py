@@ -156,6 +156,42 @@ def _pop_last_menu(chat_id: int) -> Optional[int]:
     return mid
 
 
+def _has_known_menu(chat_id: int) -> bool:
+    if chat_id in last_menu_msg:
+        return True
+    try:
+        conn = _menu_store()
+        row = conn.execute("SELECT 1 FROM ui_last_menu WHERE chat_id=?", (chat_id,)).fetchone()
+        conn.close()
+        return row is not None
+    except Exception:
+        return False
+
+
+async def sweep_old_messages(bot, chat_id: int, before_id: int, depth: int = 60, unbutton: int = 30) -> None:
+    """
+    Запасной вариант уборки, когда бот не знает id старого меню:
+    удаляем последние `depth` сообщений перед текущим /start (Telegram позволяет только
+    для сообщений младше 48 часов), а у ближайших `unbutton` более старых — убираем кнопки.
+    """
+    ids = [i for i in range(max(1, before_id - depth), before_id)]
+    if not ids:
+        return
+    try:
+        await bot.delete_messages(chat_id, ids)
+    except Exception:
+        for mid in ids[-15:]:
+            try:
+                await bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
+    for mid in range(before_id - 1, max(0, before_id - 1 - unbutton), -1):
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=mid, reply_markup=None)
+        except Exception:
+            pass
+
+
 async def retire_message(bot, chat_id: int, mid: int) -> None:
     """
     Убрать старое меню. Telegram даёт боту удалять сообщения только 48 часов,
@@ -1504,40 +1540,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "👇 <b>Жми «Старт» — первая дуэль уже ждёт!</b>"
         )
 
-        # Пытаемся отправить фото со львом
-        try:
-            # Проверяем, существует ли файл
-            if LION_WELCOME_IMG.exists():
-                with open(LION_WELCOME_IMG, 'rb') as photo:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=photo,
-                        caption=welcome_text,
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=InlineKeyboardMarkup(
-                            [[InlineKeyboardButton("🚀 Старт", callback_data="start_game")]]
-                        ),
-                    )
-            else:
-                # Если файла нет - отправляем просто текст с кнопкой
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=welcome_text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup(
-                        [[InlineKeyboardButton("🚀 Старт", callback_data="start_game")]]
-                    ),
-                )
-        except Exception as e:
-            # В случае ошибки отправляем текст
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=welcome_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🚀 Старт", callback_data="start_game")]]
-                ),
-            )
+        # Приветствие — только текст с кнопкой (без фото), запоминаем как текущее меню
+        chat_id = update.effective_chat.id
+        await drop_last_menu(context.bot, chat_id)
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=welcome_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🚀 Старт", callback_data="start_game")]]
+            ),
+        )
+        set_last_menu(chat_id, msg.message_id)
     else:
         # Пользователь уже видел приветствие - показываем главное меню
         chat_id = update.effective_chat.id
@@ -4609,6 +4623,10 @@ async def start_deeplink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     chat_id = update.effective_chat.id
     await drop_user_inputs(context.bot, chat_id)
+    if not _has_known_menu(chat_id):
+        # бот не помнит прошлое меню (например, база стёрлась при обновлении) —
+        # убираем недавние старые сообщения сами
+        await sweep_old_messages(context.bot, chat_id, update.message.message_id)
     prev = get_config(f"last_start_msg:{chat_id}")
     if prev and prev.isdigit() and int(prev) != update.message.message_id:
         try:
