@@ -7,7 +7,7 @@ import { useLoad } from '../hooks/useLoad';
 import { Chip, ErrorBox, Loader, PageTitle, haptic } from '../components/ui';
 
 const mockReq: Requisites = {
-  deposit: { ton: null, trc20: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' },
+  deposit: { ton: null, trc20: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', cryptobot: null },
   withdraw: { ton: null, trc20: null, cryptobot: 'tg_id 1350766902 (@Nikita_Kovalevsk)' },
 };
 
@@ -37,7 +37,7 @@ const META: Record<RequisiteMethod, { icon: string; title: string; placeholder: 
 
 const ORDER: Record<RequisitePurpose, RequisiteMethod[]> = {
   withdraw: ['ton', 'trc20', 'cryptobot'],
-  deposit: ['ton', 'trc20'],
+  deposit: ['ton', 'trc20', 'cryptobot'],
 };
 
 function isValid(method: RequisiteMethod, v: string) {
@@ -137,7 +137,7 @@ function AddressCard({
   );
 }
 
-function CryptoBotCard({ saved, onSaved }: { saved: string | null; onSaved: (r: Requisites) => void }) {
+function CryptoBotCard({ purpose, saved, onSaved }: { purpose: RequisitePurpose; saved: string | null; onSaved: (r: Requisites) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const on = Boolean(saved);
@@ -147,8 +147,8 @@ function CryptoBotCard({ saved, onSaved }: { saved: string | null; onSaved: (r: 
     setError(null);
     try {
       const r = import.meta.env.DEV
-        ? { ...mockReq, withdraw: { ...mockReq.withdraw, cryptobot: on ? null : 'tg_id 1 (@you)' } }
-        : await api.saveRequisite('withdraw', 'cryptobot', !on);
+        ? { ...mockReq, [purpose]: { ...mockReq[purpose], cryptobot: on ? null : 'tg_id 1 (@you)' } }
+        : await api.saveRequisite(purpose, 'cryptobot', !on);
       onSaved(r as Requisites);
       haptic();
     } catch (e) {
@@ -176,11 +176,13 @@ function CryptoBotCard({ saved, onSaved }: { saved: string | null; onSaved: (r: 
           />
         </button>
       </div>
-      <p className="mt-1.5 text-[11px] leading-relaxed text-ink-400">{META.cryptobot.hint}</p>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-ink-400">
+        {purpose === 'deposit' ? 'Пополняю Lev с баланса своего @CryptoBot.' : META.cryptobot.hint}
+      </p>
       {on && (
         <div className="mt-3 rounded-xl bg-ink-950/70 px-3 py-2 font-mono text-[12px] text-ink-300">{saved}</div>
       )}
-      {on && (
+      {on && purpose === 'withdraw' && (
         <p className="mt-2 text-[11px] text-gold-300">⚠️ Открой @CryptoBot и нажми «Старт», иначе перевод не дойдёт.</p>
       )}
       {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
@@ -233,7 +235,7 @@ export default function RequisitesPage() {
       <div className="space-y-3">
         {ORDER[tab].map((m) =>
           m === 'cryptobot' ? (
-            <CryptoBotCard key={m} saved={req.withdraw.cryptobot} onSaved={setReq} />
+            <CryptoBotCard key={`${tab}-${m}`} purpose={tab} saved={req[tab].cryptobot} onSaved={setReq} />
           ) : (
             <AddressCard key={`${tab}-${m}`} purpose={tab} method={m} saved={req[tab][m]} onSaved={setReq} />
           )

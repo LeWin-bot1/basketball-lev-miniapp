@@ -3,7 +3,7 @@ import type { MatchResult } from './index';
 
 /** Реквизиты игрока: для пополнения (с каких кошельков платит) и для вывода. */
 export interface Requisites {
-  deposit: { ton: string | null; trc20: string | null };
+  deposit: { ton: string | null; trc20: string | null; cryptobot: string | null };
   withdraw: { ton: string | null; trc20: string | null; cryptobot: string | null };
 }
 

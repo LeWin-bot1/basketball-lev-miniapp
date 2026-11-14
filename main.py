@@ -837,7 +837,7 @@ def is_crypto_requisites(text: Optional[str]) -> bool:
 # purpose: "deposit" (кошельки, с которых игрок платит) | "withdraw" (куда выводить)
 # method:  "ton" | "trc20" | "cryptobot" (cryptobot — только для вывода)
 WALLET_METHODS = {
-    "deposit": ("ton", "trc20"),
+    "deposit": ("ton", "trc20", "cryptobot"),
     "withdraw": ("ton", "trc20", "cryptobot"),
 }
 METHOD_PREFIX = {m: REQ_TYPES[m][1] for m in REQ_TYPES}  # ton -> "TON", trc20 -> "USDT-TRC20", ...
@@ -1313,7 +1313,6 @@ async def profile_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🦁 Выиграно Lev: {won}\n"
         f"💸 Проиграно Lev: {lost}\n"
         f"📈 Итог по Lev: {net_str}\n"
-        f"🔥 Самый крупный выигрыш: {best} Lev\n"
     )
 
     kb = []

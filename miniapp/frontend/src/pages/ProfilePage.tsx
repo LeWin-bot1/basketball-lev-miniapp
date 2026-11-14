@@ -18,7 +18,7 @@ const mockMe: Me = {
   },
   tournament: { rank: 4, wins: 15, losses: 9, points: 45, total: 87 },
   requisites: {
-    deposit: { ton: null, trc20: null },
+    deposit: { ton: null, trc20: null, cryptobot: null },
     withdraw: { ton: null, trc20: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', cryptobot: 'tg_id 1350766902 (@Nikita_Kovalevsk)' },
   },
   recent_matches: [
@@ -126,11 +126,10 @@ export default function ProfilePage() {
 
       {/* Lev */}
       <Section title="Lev в матчах">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <Stat label="Выиграно" value={fmtLev(s.lev_won, true)} accent="ok" />
           <Stat label="Проиграно" value={fmtLev(-s.lev_lost, true)} accent="bad" />
           <Stat label="Итог" value={fmtLev(s.lev_net, true)} accent="gold" />
-          <Stat label="Крупнейший выигрыш" value={fmtLev(s.best_win)} />
         </div>
       </Section>
 

@@ -673,7 +673,7 @@ def get_saved_requisites(user_id: int) -> Optional[str]:
 # -------------------- Реквизиты (общие с ботом: таблица player_wallets) --------------------
 import re as _re
 
-WALLET_METHODS = {"deposit": ("ton", "trc20"), "withdraw": ("ton", "trc20", "cryptobot")}
+WALLET_METHODS = {"deposit": ("ton", "trc20", "cryptobot"), "withdraw": ("ton", "trc20", "cryptobot")}
 _PREFIX = {"ton": "TON", "trc20": "USDT-TRC20", "cryptobot": "CRYPTOBOT"}
 _TRC20 = _re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 _TON_FRIENDLY = _re.compile(r"^(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}$")

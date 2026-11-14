@@ -13,7 +13,7 @@ const mockWallet: Wallet = {
   balance: 955,
   pending_withdraw_lev: 200,
   requisites: {
-    deposit: { ton: null, trc20: null },
+    deposit: { ton: null, trc20: null, cryptobot: null },
     withdraw: { ton: null, trc20: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', cryptobot: null },
   },
   deposits: [
