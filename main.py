@@ -1117,7 +1117,8 @@ def main_menu(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton("💸 Пополнить", callback_data="shop"),
             InlineKeyboardButton("🏦 Вывести", callback_data="withdraw_menu"),
         ],
-        [requisites_webapp_btn("withdraw") or InlineKeyboardButton("🔐 Реквизиты", callback_data="requisites_menu")],
+        [InlineKeyboardButton("💱 Курс", callback_data="rates_menu"),
+         requisites_webapp_btn("withdraw") or InlineKeyboardButton("🔐 Реквизиты", callback_data="requisites_menu")],
     ])
     # старые выигранные звёзды (долг бота) — кнопка видна, только пока есть что выводить
     if get_stars_pending(uid) > 0:
@@ -1569,7 +1570,7 @@ async def text_any(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # всё, что игрок пишет в ходе операций, уберём из чата при отмене/завершении
     remember_user_input(update.effective_chat.id, update.message.message_id)
     # --- оформление вывода Lev (адрес / сумма) ---
-    if context.user_data.get("await_wd") in ("address", "amount", "stars_amount"):
+    if context.user_data.get("await_wd") in ("address", "amount", "stars_amount", "stars_deposit"):
         return await wd_text_input(update, context, text)
     # --- пользователь вводит количество Stars для вывода (кнопка "Вывести Stars") ---
     if context.user_data.get("await_stars_withdraw"):
@@ -1911,12 +1912,23 @@ async def friend_stars_soon(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------------------- ПОПОЛНЕНИЕ LEV: ЗВЁЗДЫ + КРИПТА --------------------
 # Курсы хранятся в таблице config и меняются админом: /setrate star 10
 # ⚠️ Значения по умолчанию — ТЕСТОВЫЕ.
-DEFAULT_RATES = {"star": 10.0, "usdt": 100.0, "ton": 300.0,   # сколько Lev за 1 ⭐ / 1 USDT / 1 TON
-                 "star_out": 10.0}                             # сколько Lev списать за 1 ⭐ при ВЫВОДЕ
-RATE_LABELS = {"star": "1 ⭐", "usdt": "1 USDT", "ton": "1 TON", "star_out": "1 ⭐ (вывод)"}
+# Курсы (сколько Lev за 1 единицу валюты). ⚠️ Значения по умолчанию — ТЕСТОВЫЕ.
+#   покупка (пополнение): star, usdt, ton       — игрок платит 1 ед. и получает N Lev
+#   вывод:                star_out, usdt_out, ton_out — игрок отдаёт N Lev за 1 ед.
+# Меняются админом: /setrate usdt 100, /setrate usdt_out 110 и т.д.
+DEFAULT_RATES = {
+    "star": 10.0, "usdt": 100.0, "ton": 300.0,
+    "star_out": 10.0, "usdt_out": 100.0, "ton_out": 300.0,
+}
+RATE_LABELS = {
+    "star": "1 ⭐", "usdt": "1 USDT", "ton": "1 TON",
+    "star_out": "1 ⭐ (вывод)", "usdt_out": "1 USDT (вывод)", "ton_out": "1 TON (вывод)",
+}
+CURRENCY_NAMES = {"star": "⭐ Stars", "usdt": "💵 USDT", "ton": "💎 TON"}
 STARS_WITHDRAW_FRAGMENT_MIN = 50          # Fragment продаёт звёзды от 50 штук
 STARS_WITHDRAW_PRESETS = [50, 100, 250, 500]
 STAR_TOPUP_OPTIONS = [1, 5, 25, 100]
+STARS_DEPOSIT_MAX = 10000
 CRYPTO_TOPUP_OPTIONS = {
     "USDT": ["0.1", "1", "5", "10"],
     "TON": ["0.1", "0.5", "1", "5"],
@@ -1944,9 +1956,39 @@ def lev_for(kind: str, amount: float) -> int:
     return int(amount * get_rate(kind) + 1e-9)
 
 
-def rates_text() -> str:
-    return "\n".join(
-        f"• {RATE_LABELS[k]} = {get_rate(k):g} Lev" for k in ("star", "usdt", "ton")
+def rates_text(kind: str = "in") -> str:
+    """kind: "in" — курс покупки Lev, "out" — курс вывода, "both" — обе таблицы."""
+    def unit(k):
+        return "1 ⭐" if k == "star" else f"1 {k.upper()}"
+
+    buy = "\n".join(f"• {unit(k)} → {get_rate(k):g} Lev" for k in ("star", "usdt", "ton"))
+    sell = "\n".join(f"• {get_rate(k + '_out'):g} Lev → {unit(k)}" for k in ("star", "usdt", "ton"))
+    if kind == "in":
+        return buy
+    if kind == "out":
+        return sell
+    return f"🟢 <b>Покупка Lev</b> (пополнение):\n{buy}\n\n🔴 <b>Вывод Lev</b>:\n{sell}"
+
+
+async def rates_menu_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка «💱 Курс» в главном меню."""
+    q = update.callback_query
+    await q.answer()
+    fee = withdraw_fee_pct()
+    await delete_and_send_new(
+        q,
+        "💱 <b>Курс Lev</b>\n\n"
+        + rates_text("both")
+        + (f"\n\nКомиссия за вывод: {fee:g}%" if fee else "")
+        + "\n\nПри пополнении и выводе бот сразу показывает, сколько ты получишь.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("💸 Пополнить", callback_data="shop"),
+                 InlineKeyboardButton("🏦 Вывести", callback_data="withdraw_menu")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu")],
+            ]
+        ),
     )
 
 
@@ -2032,7 +2074,7 @@ async def shop_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🪙 Криптой (USDT / TON)\n"
         "⭐ Звёздами\n\n"
         "Lev начисляются автоматически сразу после оплаты.\n\n"
-        f"Курс:\n{rates_text()}",
+        f"Курс покупки:\n{rates_text('in')}",
         reply_markup=topup_menu_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -2046,8 +2088,14 @@ async def topup_stars_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for n in STAR_TOPUP_OPTIONS
     ]
     kb.append([InlineKeyboardButton("↩️ Назад", callback_data="shop")])
+    context.user_data["await_wd"] = "stars_deposit"
+    context.user_data["wd"] = {"method": "stars_deposit"}
     await delete_and_send_new(
-        q, "⭐ Сколько звёзд потратить на пополнение?", reply_markup=InlineKeyboardMarkup(kb)
+        q,
+        f"⭐ <b>Пополнение звёздами</b>\nКурс: 1 ⭐ → {get_rate('star'):g} Lev\n\n"
+        "Напиши, сколько звёзд потратить (например, <code>70</code>), или выбери ниже:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
@@ -2055,8 +2103,10 @@ async def topup_star_amount_btn(update: Update, context: ContextTypes.DEFAULT_TY
     q = update.callback_query
     await q.answer()
     stars = int(q.data.split(":")[1])
-    if stars <= 0:
+    if stars <= 0 or stars > STARS_DEPOSIT_MAX:
         return
+    context.user_data.pop("await_wd", None)
+    context.user_data.pop("wd", None)
     lev = lev_for("star", stars)
     payload = f"lev_stars:{q.from_user.id}:{stars}:{lev}:{secrets.token_hex(3)}"
     chat_id = q.message.chat.id
@@ -2474,8 +2524,10 @@ async def cmd_setrate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if len(context.args) != 2 or context.args[0] not in DEFAULT_RATES:
         return await update.message.reply_text(
-            "Использование: /setrate <star|usdt|ton> <Lev за 1>\nПример: /setrate usdt 100\n\n"
-            f"Текущий курс:\n{rates_text()}"
+            "Использование: /setrate <ключ> <Lev за 1>\nПример: /setrate usdt 100 или /setrate usdt_out 110\n\n"
+            "Ключи: star, usdt, ton (покупка) и star_out, usdt_out, ton_out (вывод)\n\n"
+            f"Текущий курс:\n{rates_text('both')}",
+            parse_mode=ParseMode.HTML,
         )
     try:
         val = float(context.args[1].replace(",", "."))
@@ -2483,11 +2535,11 @@ async def cmd_setrate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return await update.message.reply_text("Курс должен быть положительным числом.")
     set_config(f"rate_{context.args[0]}", str(val))
-    await update.message.reply_text(f"✅ Курс обновлён.\n{rates_text()}")
+    await update.message.reply_text(f"✅ Курс обновлён.\n\n{rates_text('both')}", parse_mode=ParseMode.HTML)
 
 
 async def cmd_rates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"💱 Курс Lev:\n{rates_text()}")
+    await update.message.reply_text(f"💱 Курс Lev\n\n{rates_text('both')}", parse_mode=ParseMode.HTML)
 
 
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2673,7 +2725,7 @@ def withdraw_fee_pct() -> float:
 
 def lev_to_crypto(lev: int, asset: str) -> str:
     """Сколько монет получит игрок за lev (по курсу, минус комиссия), строкой для API."""
-    rate = get_rate(asset.lower())
+    rate = get_rate(asset.lower() + "_out")  # курс ВЫВОДА
     net = lev * (1 - withdraw_fee_pct() / 100.0) / rate
     d = WD_DECIMALS.get(asset, 2)
     factor = 10 ** d
@@ -2706,13 +2758,28 @@ async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fee = withdraw_fee_pct()
     text = (
         f"🏦 <b>Вывод Lev</b>\n💰 Баланс: {get_lev(q.from_user.id)} Lev\n\n"
-        f"Курс вывода:\n• {get_rate('usdt'):g} Lev = 1 USDT\n• {get_rate('ton'):g} Lev = 1 TON\n"
-        f"• {get_rate('star_out'):g} Lev = 1 ⭐ (от {STARS_WITHDRAW_FRAGMENT_MIN} ⭐)\n"
+        f"Курс вывода:\n{rates_text('out')}\n"
         f"Минимум криптой: {WITHDRAW_MIN} Lev"
         + (f" · комиссия {fee:g}%" if fee else "")
         + "\n\nВыбери способ:\n🪙 Криптой (USDT / TON)\n⭐ Звёздами"
     )
     await delete_and_send_new(q, text, reply_markup=withdraw_menu_kb(), parse_mode=ParseMode.HTML)
+
+
+def _back_to_shop_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Назад", callback_data="shop")]])
+
+
+async def clear_pending_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Срабатывает перед любой кнопкой: если игрок ушёл из пополнения/вывода в другое меню,
+    сбрасываем ожидание ввода суммы/адреса, чтобы следующее сообщение не попало не туда.
+    """
+    q = update.callback_query
+    data = (q.data or "") if q else ""
+    if not data.startswith(("wd", "topup_star", "invoice_cancel")):
+        context.user_data.pop("await_wd", None)
+        context.user_data.pop("wd", None)
 
 
 def _cancel_wd_kb() -> InlineKeyboardMarkup:
@@ -2729,7 +2796,7 @@ def _wd_amount_prompt(wd: dict, balance: int) -> str:
     return (
         f"{WD_METHODS[wd['method']]}\n"
         f"Монета: <b>{asset}</b>, {where}\n\n"
-        f"Курс: {get_rate(asset.lower()):g} Lev = 1 {asset}\n"
+        f"Курс вывода: {get_rate(asset.lower() + '_out'):g} Lev → 1 {asset}\n"
         f"Доступно: {balance} Lev · минимум {WITHDRAW_MIN} Lev\n\n"
         "✍️ Напиши сумму Lev для вывода, например <code>500</code>"
     )
@@ -2839,6 +2906,26 @@ async def wd_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text
     if not wd:
         context.user_data.pop("await_wd", None)
         return await reply("Выбери способ вывода:", kb=withdraw_menu_kb())
+
+    if stage == "stars_deposit":
+        try:
+            stars = int(text.replace(" ", "").replace("⭐", ""))
+        except ValueError:
+            return await reply("Напиши количество звёзд числом, например 70.", kb=_back_to_shop_kb())
+        if stars < 1 or stars > STARS_DEPOSIT_MAX:
+            return await reply(f"Можно от 1 до {STARS_DEPOSIT_MAX} ⭐ за раз. Напиши другое число:", kb=_back_to_shop_kb())
+        lev = lev_for("star", stars)
+        context.user_data["await_wd"] = "stars_deposit"
+        return await reply(
+            f"⭐ {stars} ⭐ → <b>{lev} Lev</b>\n\nОплатить?",
+            kb=InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton(f"✅ Оплатить {stars} ⭐", callback_data=f"topup_star:{stars}")],
+                    [InlineKeyboardButton("↩️ Назад", callback_data="shop")],
+                ]
+            ),
+            html=True,
+        )
 
     if stage == "stars_amount":
         try:
@@ -6436,6 +6523,7 @@ def build_app():
     app.add_handler(CommandHandler("support", cmd_support))
     app.add_handler(CommandHandler("reset_welcome", cmd_reset_welcome))
     app.add_handler(CallbackQueryHandler(start_game_btn, pattern=r"^start_game$"))
+    app.add_handler(CallbackQueryHandler(clear_pending_input), group=-1)
     app.add_handler(CallbackQueryHandler(menu_btn, pattern=r"^menu$"))
 
     # История операций Lev и Stars
@@ -6485,6 +6573,7 @@ def build_app():
     app.add_handler(CallbackQueryHandler(shop_btn, pattern=r"^shop$"))
     app.add_handler(CallbackQueryHandler(buy_btn, pattern=r"^buy:.+"))
     app.add_handler(CallbackQueryHandler(topup_stars_btn, pattern=r"^topup_stars$"))
+    app.add_handler(CallbackQueryHandler(rates_menu_btn, pattern=r"^rates_menu$"))
     app.add_handler(CallbackQueryHandler(wd_method_btn, pattern=r"^wd:(cryptobot|trc20|ton)$"))
     app.add_handler(CallbackQueryHandler(wd_asset_btn, pattern=r"^wd_asset:"))
     app.add_handler(CallbackQueryHandler(wd_saved_btn, pattern=r"^wd_saved$"))

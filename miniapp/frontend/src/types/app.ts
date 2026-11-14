@@ -89,7 +89,9 @@ export interface CryptoConfig {
   enabled: boolean;
   network: string;
   balance: number;
-  rates: Record<CryptoAsset, number>;
+  rates: Record<CryptoAsset, number>;      // покупка: 1 монета → N Lev
+  rates_out?: Record<CryptoAsset, number>; // вывод: N Lev → 1 монета
+  stars?: { in: number; out: number };
   deposit: {
     assets: CryptoAsset[];
     presets: Record<CryptoAsset, string[]>;

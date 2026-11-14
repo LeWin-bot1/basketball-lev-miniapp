@@ -327,7 +327,9 @@ async def crypto_config(user: TelegramInitData = Depends(get_current_user)):
         "enabled": bool(b.CRYPTO_PAY_TOKEN),
         "network": b.CRYPTO_PAY_NETWORK,
         "balance": b.get_lev(uid),
-        "rates": {"USDT": b.get_rate("usdt"), "TON": b.get_rate("ton")},
+        "rates": {"USDT": b.get_rate("usdt"), "TON": b.get_rate("ton")},          # покупка: 1 ед. → N Lev
+        "rates_out": {"USDT": b.get_rate("usdt_out"), "TON": b.get_rate("ton_out")},  # вывод: N Lev → 1 ед.
+        "stars": {"in": b.get_rate("star"), "out": b.get_rate("star_out")},
         "deposit": {
             "assets": ["USDT", "TON"],
             "presets": b.CRYPTO_TOPUP_OPTIONS,

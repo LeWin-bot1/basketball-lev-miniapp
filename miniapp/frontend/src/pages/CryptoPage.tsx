@@ -14,6 +14,8 @@ const mockConfig: CryptoConfig = {
   network: 'testnet',
   balance: 955,
   rates: { USDT: 100, TON: 300 },
+  rates_out: { USDT: 110, TON: 320 },
+  stars: { in: 10, out: 12 },
   deposit: { assets: ['USDT', 'TON'], presets: { USDT: ['1', '5', '10', '25'], TON: ['0.5', '1', '5', '10'] }, min: { USDT: 0.1, TON: 0.05 }, max: 10000 },
   withdraw: { min_lev: 100, fee_pct: 0, decimals: { USDT: 2, TON: 3 }, saved: { ton: null, trc20: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', cryptobot: null } },
 };
@@ -151,7 +153,7 @@ function Deposit({ cfg, onBalance }: { cfg: CryptoConfig; onBalance: (b: number)
             >
               <div className="text-lg">{ASSET_ICON[a]}</div>
               <div className="mt-1 text-sm font-semibold">{a}</div>
-              <div className="text-[11px] text-ink-400">1 {a} = {cfg.rates[a]} Lev</div>
+              <div className="text-[11px] text-ink-400">1 {a} → {cfg.rates[a]} Lev</div>
             </button>
           ))}
         </div>
@@ -214,7 +216,8 @@ function Withdraw({ cfg, onBalance }: { cfg: CryptoConfig; onBalance: (b: number
 
   const levNum = parseInt(lev || '0', 10) || 0;
   const dec = cfg.withdraw.decimals[asset] ?? 2;
-  const out = Math.floor(((levNum * (1 - cfg.withdraw.fee_pct / 100)) / cfg.rates[asset]) * 10 ** dec + 1e-9) / 10 ** dec;
+  const outRate = (cfg.rates_out ?? cfg.rates)[asset];
+  const out = Math.floor(((levNum * (1 - cfg.withdraw.fee_pct / 100)) / outRate) * 10 ** dec + 1e-9) / 10 ** dec;
   const addrOk = method === 'cryptobot' || (method === 'trc20' ? TRC20.test(address.trim()) : TON.test(address.trim()));
   const levErr =
     lev === '' ? null : levNum < cfg.withdraw.min_lev ? `Минимум ${cfg.withdraw.min_lev} Lev` : levNum > cfg.balance ? 'Больше, чем на балансе' : null;
@@ -324,7 +327,7 @@ function Withdraw({ cfg, onBalance }: { cfg: CryptoConfig; onBalance: (b: number
           <span className="tabular text-lg font-extrabold"><span className="gold-text">{levNum > 0 ? out.toFixed(dec) : '0'}</span> <span className="text-sm text-gold-400">{asset}</span></span>
         </div>
         <div className="mt-2 text-[11px] text-ink-400">
-          Курс: {cfg.rates[asset]} Lev = 1 {asset}{cfg.withdraw.fee_pct ? ` · комиссия ${cfg.withdraw.fee_pct}%` : ''}
+          Курс вывода: {outRate} Lev → 1 {asset}{cfg.withdraw.fee_pct ? ` · комиссия ${cfg.withdraw.fee_pct}%` : ''}
         </div>
         {levErr && <p className="mt-2 text-[11px] text-rose-300">{levErr}</p>}
         {error && <p className="mt-2 text-[11px] text-rose-300">{error}</p>}
@@ -366,9 +369,31 @@ export default function CryptoPage() {
             <span className="ml-1.5 text-base font-semibold text-gold-400">Lev</span>
           </div>
         </div>
-        <div className="text-right text-[11px] text-ink-400">
-          1 USDT = {data.rates.USDT} Lev<br />1 TON = {data.rates.TON} Lev
+      </div>
+
+      {/* Курс покупки и вывода */}
+      <div className="card mb-4 overflow-hidden">
+        <div className="grid grid-cols-3 border-b border-white/[0.06] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-400">
+          <span>Курс</span>
+          <span className="text-center text-emerald-300/80">Покупка</span>
+          <span className="text-right text-rose-300/80">Вывод</span>
         </div>
+        {(
+          [
+            ['💵 1 USDT', data.rates.USDT, (data.rates_out ?? data.rates).USDT],
+            ['💎 1 TON', data.rates.TON, (data.rates_out ?? data.rates).TON],
+            ...(data.stars ? [['⭐ 1 Star', data.stars.in, data.stars.out] as const] : []),
+          ] as const
+        ).map(([name, buy, sell]) => (
+          <div key={name} className="tabular grid grid-cols-3 px-4 py-2 text-sm">
+            <span className="text-ink-300">{name}</span>
+            <span className="text-center font-semibold text-emerald-300">+{buy} Lev</span>
+            <span className="text-right font-semibold text-rose-300">−{sell} Lev</span>
+          </div>
+        ))}
+        <p className="border-t border-white/[0.06] px-4 py-2 text-[11px] text-ink-400">
+          Покупка: за 1 монету получаешь Lev. Вывод: столько Lev списывается за 1 монету.
+        </p>
       </div>
 
       <div className="mb-4">
