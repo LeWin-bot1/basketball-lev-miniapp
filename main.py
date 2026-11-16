@@ -1918,7 +1918,7 @@ async def friend_stars_soon(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Меняются админом: /setrate usdt 100, /setrate usdt_out 110 и т.д.
 DEFAULT_RATES = {
     "star": 10.0, "usdt": 100.0, "ton": 300.0,
-    "star_out": 10.0, "usdt_out": 100.0, "ton_out": 300.0,
+    "star_out": 12.0, "usdt_out": 100.0, "ton_out": 300.0,
 }
 RATE_LABELS = {
     "star": "1 ⭐", "usdt": "1 USDT", "ton": "1 TON",
